@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#3c5066"/>
+  <g fill="#fff" transform="translate(64 96)">
+    <!-- 上行折线 -->
+    <polyline points="0,260 64,200 128,230 192,140 256,170 320,80 384,110"
+              stroke="#fff" stroke-width="14" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- 数据点 -->
+    <circle cx="64" cy="200" r="14" fill="#fff"/>
+    <circle cx="192" cy="140" r="14" fill="#fff"/>
+    <circle cx="320" cy="80" r="20" fill="#f08c00" stroke="#fff" stroke-width="6"/>
+  </g>
+  <text x="256" y="430" text-anchor="middle" font-family="-apple-system, sans-serif"
+        font-size="64" font-weight="700" fill="#fff" letter-spacing="6">L</text>
+</svg>

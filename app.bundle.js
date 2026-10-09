@@ -82,6 +82,8 @@ async function clear() {
   });
 }
 
+window.DB = { uid, add, put, remove, getAll, clear };
+
 
 // === js/settings.js ===
 // Settings store. baseURL + model in localStorage; apiKey in localStorage too
@@ -109,6 +111,8 @@ const Settings = {
     return !!this.apiKey.trim() && !!this.baseURL.trim() && !!this.model.trim();
   }
 };
+
+window.Settings = Settings;
 
 
 // === js/llm.js ===
@@ -246,6 +250,8 @@ async function testConnection() {
   return parse(raw);
 }
 
+window.LLM = { extractExpenseFromText, extractExpenseFromImage, testConnection };
+
 
 // === js/speech.js ===
 // Web Speech API wrapper (browser equivalent of iOS SpeechRecognizer).
@@ -323,6 +329,8 @@ function stop() {
     listen._current = null;
   }
 }
+
+window.Speech = { isSupported, listen, stop };
 
 
 // === js/util.js ===
@@ -424,9 +432,16 @@ function el(tag, attrs = {}, ...children) {
   return e;
 }
 
+window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el };
+
 
 // === js/views/input.js ===
 (function() {
+const DB = window.DB;
+const { Settings } = window.Settings;
+const { extractExpenseFromText, extractExpenseFromImage } = window.LLM;
+const { isSupported: speechSupported, listen: speechListen, stop: speechStop } = window.Speech;
+const { el, fmtDate, fmtMoney, showToast } = window.Util;
 
 
 
@@ -724,6 +739,8 @@ window.renderInput = renderInput;
 
 // === js/views/stats.js ===
 (function() {
+const DB = window.DB;
+const { el, fmtMoney, fmtYM, fmtMonthDay, showToast, startOfWeek, startOfMonth, startOfYear, startOfDay } = window.Util;
 
 
 let allRecords = [];
@@ -1108,6 +1125,8 @@ window.renderStats = renderStats;
 
 // === js/views/records.js ===
 (function() {
+const DB = window.DB;
+const { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToast } = window.Util;
 
 
 let allRecords = [];
@@ -1256,6 +1275,9 @@ window.renderRecords = renderRecords;
 
 // === js/views/settings.js ===
 (function() {
+const { Settings } = window.Settings;
+const { testConnection } = window.LLM;
+const { el } = window.Util;
 
 
 
@@ -1418,6 +1440,7 @@ window.renderSettings = renderSettings;
 
 // === js/app.js ===
 (function() {
+
 // Main app router. Registers service worker and renders the active tab.
 
 // render functions are exposed on window by build.py (see IIFE module exports list).

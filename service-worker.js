@@ -1,5 +1,5 @@
 // Ledgerly PWA service worker — offline shell + cache
-const CACHE = 'ledgerly-v1';
+const CACHE = 'ledgerly-v2';
 const SHELL = [
   './',
   './index.html',
@@ -28,8 +28,14 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+      // 删除所有旧版本缓存（不仅匹配 CACHE 变量，避免再次升级时踩坑）
+      Promise.all(keys.filter((k) => k.startsWith('ledgerly-') && k !== CACHE).map((k) => caches.delete(k)))
+    ).then(() => {
+      // 通知所有客户端刷新（强制重新拉新文件）
+      return self.clients.matchAll({ type: 'window' }).then((clients) => {
+        clients.forEach((c) => c.navigate(c.url));
+      });
+    })
   );
   self.clients.claim();
 });

@@ -718,6 +718,8 @@ function renderInput() {
   root.appendChild(wrap);
 }
 
+window.renderInput = renderInput;
+
 })();
 
 // === js/views/stats.js ===
@@ -1100,6 +1102,8 @@ async function renderStats() {
   }, 0);
 }
 
+window.renderStats = renderStats;
+
 })();
 
 // === js/views/records.js ===
@@ -1245,6 +1249,8 @@ function renderRow(r) {
     el('div', { class: 'amount' }, '¥' + fmtMoney(r.amount))
   );
 }
+
+window.renderRecords = renderRecords;
 
 })();
 
@@ -1406,15 +1412,16 @@ function renderSettings() {
   }
 }
 
+window.renderSettings = renderSettings;
+
 })();
 
 // === js/app.js ===
 (function() {
 // Main app router. Registers service worker and renders the active tab.
 
-
-
-
+// render functions are exposed on window by build.py (see IIFE module exports list).
+// We wrap them in arrow functions so RENDERERS[name]() is safe to call even if window.renderX isn't ready yet.
 
 const TITLES = {
   input: '记一笔',
@@ -1424,10 +1431,10 @@ const TITLES = {
 };
 
 const RENDERERS = {
-  input: renderInput,
-  stats: renderStats,
-  records: renderRecords,
-  settings: renderSettings
+  input: () => window.renderInput && window.renderInput(),
+  stats: () => window.renderStats && window.renderStats(),
+  records: () => window.renderRecords && window.renderRecords(),
+  settings: () => window.renderSettings && window.renderSettings()
 };
 
 let activeTab = 'input';
@@ -1477,5 +1484,7 @@ window.addEventListener('load', () => {
     setActiveTab('input');
   }
 });
+
+window.setActiveTab = setActiveTab;
 
 })();

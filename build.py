@@ -84,22 +84,27 @@ def extract_view_imports(src: str) -> str:
         m = re.match(r"import\s+\{([^}]+)\}\s+from\s+['\"]\.\.?/(\w+(?:/\w+)*)\.js['\"]", raw)
         if m:
             raw_names = [n.strip() for n in m.group(1).split(',')]
-            # JS 解构语法用 { Y: X } 而不是 { X as Y }，转一下
-            names = []
-            for n in raw_names:
-                parts = re.split(r'\s+as\s+', n)
-                if len(parts) == 2:
-                    # import { X as Y } → JS 解构: { X: Y }  (X 是源, Y 是目标)
-                    names.append(f'{parts[0]}: {parts[1]}')
-                else:
-                    names.append(parts[0])
             mod_path = m.group(2)
             mod_key = 'js/' + mod_path + '.js'
             if mod_key in MODULE_CONFIG:
                 _, win_name = MODULE_CONFIG[mod_key]
                 mode, _ = MODULE_CONFIG[mod_key]
-                if mode in ('namespace', 'passthrough'):
+                if mode == 'namespace':
+                    # 多函数模块：{ name1, name2 } = window.X
+                    names = []
+                    for n in raw_names:
+                        parts = re.split(r'\s+as\s+', n)
+                        if len(parts) == 2:
+                            names.append(f'{parts[0]}: {parts[1]}')
+                        else:
+                            names.append(parts[0])
                     lines.append(f'const {{ {", ".join(names)} }} = window.{win_name};')
+                elif mode == 'passthrough':
+                    # 单 const 导出：view 里 import { Settings } from '...'
+                    # 意思是要拿到那个 const 对象本身，不是再解构它
+                    # 所以生成 const Name = window.X (普通赋值)，不是 const { Name } = window.X
+                    assert len(raw_names) == 1, f'{m} passthrough 模式只能有 1 个具名导入'
+                    lines.append(f'const {raw_names[0]} = window.{win_name};')
             continue
     return '\n'.join(lines)
 

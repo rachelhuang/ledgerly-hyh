@@ -438,7 +438,7 @@ window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, star
 // === js/views/input.js ===
 (function() {
 const DB = window.DB;
-const { Settings } = window.Settings;
+const Settings = window.Settings;
 const { extractExpenseFromText, extractExpenseFromImage } = window.LLM;
 const { isSupported: speechSupported, listen: speechListen, stop: speechStop } = window.Speech;
 const { el, fmtDate, fmtMoney, showToast } = window.Util;
@@ -1275,7 +1275,7 @@ window.renderRecords = renderRecords;
 
 // === js/views/settings.js ===
 (function() {
-const { Settings } = window.Settings;
+const Settings = window.Settings;
 const { testConnection } = window.LLM;
 const { el } = window.Util;
 

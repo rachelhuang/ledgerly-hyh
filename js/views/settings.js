@@ -1,9 +1,18 @@
 import { Settings } from '../settings.js';
 import { testConnection } from '../llm.js';
-import { el, showToast } from '../util.js';
+import { el } from '../util.js';
 
 let testing = false;
 let lastResult = null;
+let formValues = {
+  baseURL: Settings.baseURL,
+  apiKey: Settings.apiKey,
+  model: Settings.model
+};
+
+function checkConfigured() {
+  return !!formValues.baseURL.trim() && !!formValues.apiKey.trim() && !!formValues.model.trim();
+}
 
 export function renderSettings() {
   const root = document.getElementById('view');
@@ -12,11 +21,12 @@ export function renderSettings() {
   const wrap = el('div', { style: 'padding-top: 8px;' });
 
   // Status
+  const statusOk = checkConfigured();
   wrap.appendChild(el('div', { class: 'section' },
     el('div', { class: 'field' },
       el('div', { style: 'display:flex; align-items:center; gap:6px;' },
-        el('span', { style: `color:${Settings.isConfigured ? '#2f9e44' : '#f08c00'}; font-size: 16px;` }, Settings.isConfigured ? '✅' : '⚠'),
-        el('span', { style: 'font-weight: 500;' }, Settings.isConfigured ? '已配置' : '未配置')
+        el('span', { style: `color:${statusOk ? '#2f9e44' : '#f08c00'}; font-size: 16px;' }, statusOk ? '✅' : '⚠'),
+        el('span', { style: 'font-weight: 500;' }, statusOk ? '已配置' : '未配置')
       )
     )
   ));
@@ -28,8 +38,8 @@ export function renderSettings() {
   const f1 = el('div', { class: 'field' });
   f1.appendChild(el('label', {}, 'Base URL'));
   const i1 = el('input', {
-    type: 'url', value: Settings.baseURL,
-    oninput: (e) => Settings.baseURL = e.target.value.trim()
+    type: 'url', value: formValues.baseURL, autocomplete: 'off',
+    oninput: (e) => { formValues.baseURL = e.target.value.trim(); updateStatus(); }
   });
   f1.appendChild(i1);
   sec1.appendChild(f1);
@@ -37,8 +47,8 @@ export function renderSettings() {
   const f2 = el('div', { class: 'field' });
   f2.appendChild(el('label', {}, 'API Key'));
   const i2 = el('input', {
-    type: 'password', value: Settings.apiKey,
-    oninput: (e) => Settings.apiKey = e.target.value.trim()
+    type: 'password', value: formValues.apiKey, autocomplete: 'off',
+    oninput: (e) => { formValues.apiKey = e.target.value.trim(); updateStatus(); }
   });
   f2.appendChild(i2);
   sec1.appendChild(f2);
@@ -46,8 +56,8 @@ export function renderSettings() {
   const f3 = el('div', { class: 'field' });
   f3.appendChild(el('label', {}, 'Model'));
   const i3 = el('input', {
-    type: 'text', value: Settings.model,
-    oninput: (e) => Settings.model = e.target.value.trim()
+    type: 'text', value: formValues.model, autocomplete: 'off',
+    oninput: (e) => { formValues.model = e.target.value.trim(); updateStatus(); }
   });
   f3.appendChild(i3);
   sec1.appendChild(f3);
@@ -57,7 +67,6 @@ export function renderSettings() {
   const sec2 = el('div', { class: 'section' });
   const testBtn = el('button', {
     class: 'btn-primary',
-    disabled: !Settings.isConfigured || testing,
     onclick: runTest
   }, testing ? '测试中...' : '测试连接');
   sec2.appendChild(testBtn);
@@ -104,10 +113,25 @@ export function renderSettings() {
 
   root.appendChild(wrap);
 
+  updateStatus();
+
+  function updateStatus() {
+    const ok = checkConfigured();
+    testBtn.disabled = !ok || testing;
+    testBtn.textContent = testing ? '测试中...' : '测试连接';
+  }
+
   async function runTest() {
+    if (!checkConfigured() || testing) return;
+
+    // Persist to localStorage so other views can read
+    Settings.baseURL = formValues.baseURL;
+    Settings.apiKey = formValues.apiKey;
+    Settings.model = formValues.model;
+
     testing = true;
     lastResult = null;
-    renderSettings();
+    updateStatus();
     try {
       const r = await testConnection();
       lastResult = { success: true, msg: `✅ 连接成功：${r.category} ¥${r.amount} · ${r.description}` };
@@ -115,6 +139,18 @@ export function renderSettings() {
       lastResult = { success: false, msg: '❌ ' + (e.message || String(e)) };
     }
     testing = false;
-    renderSettings();
+    updateStatus();
+    if (lastResult) {
+      const footer = sec2.querySelector('.footer:last-of-type');
+      // re-render only the result line
+      let resultLine = sec2.querySelector('.test-result');
+      if (!resultLine) {
+        resultLine = el('div', { class: 'footer test-result' });
+        sec2.insertBefore(resultLine, footer);
+      }
+      resultLine.style.color = lastResult.success ? '#2f9e44' : '#d6336c';
+      resultLine.style.marginTop = '8px';
+      resultLine.textContent = lastResult.msg;
+    }
   }
 }

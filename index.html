@@ -12,6 +12,27 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
   <link rel="stylesheet" href="./styles.css">
   <title>Ledgerly</title>
+  <script>
+    // 兜底：把任何 JS 错误（包括 module 加载失败）显示在页面上
+    function showError(label, info) {
+      var box = document.getElementById('err-box') || (function() {
+        var d = document.createElement('div');
+        d.id = 'err-box';
+        d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fff5f5;color:#a00;padding:16px;font:12px/1.4 monospace;white-space:pre-wrap;word-break:break-all;border-bottom:2px solid #d6336c;max-height:50vh;overflow:auto;';
+        document.body && document.body.appendChild(d);
+        return d;
+      })();
+      var line = document.createElement('div');
+      line.textContent = '[' + label + '] ' + (info && info.stack ? info.stack : String(info));
+      box.appendChild(line);
+    }
+    window.addEventListener('error', function(e) {
+      showError('error', e.error || e.message);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      showError('promise', e.reason);
+    });
+  </script>
 </head>
 <body>
   <div id="app">

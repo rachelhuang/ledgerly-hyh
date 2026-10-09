@@ -6,6 +6,7 @@ const SHELL = [
   './styles.css',
   './manifest.webmanifest',
   './icons/icon.svg',
+  './icons/apple-touch-icon.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './app.bundle.js'

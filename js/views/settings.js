@@ -25,7 +25,7 @@ export function renderSettings() {
   wrap.appendChild(el('div', { class: 'section' },
     el('div', { class: 'field' },
       el('div', { style: 'display:flex; align-items:center; gap:6px;' },
-        el('span', { style: `color:${statusOk ? '#2f9e44' : '#f08c00'}; font-size: 16px;' }, statusOk ? '✅' : '⚠'),
+        el('span', { style: `color:${statusOk ? '#2f9e44' : '#f08c00'}; font-size: 16px;` }, statusOk ? '✅' : '⚠'),
         el('span', { style: 'font-weight: 500;' }, statusOk ? '已配置' : '未配置')
       )
     )

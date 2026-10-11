@@ -254,83 +254,125 @@ window.LLM = { extractExpenseFromText, extractExpenseFromImage, testConnection }
 
 
 // === js/speech.js ===
-// Web Speech API wrapper (browser equivalent of iOS SpeechRecognizer).
-// Uses webkitSpeechRecognition / SpeechRecognition with continuous=false.
+// Web Speech API wrapper. Returns a controller object so they can reliably
+// start/stop recognition (previous implementation wedged on iOS Safari because
+// recognition only ended on its own with continuous=false).
 
 const LANG = 'zh-CN';
 
-function getRecognizer() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) throw new Error('当前浏览器不支持语音识别');
-  return SR;
+function getRecognizerCtor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition;
 }
 
 function isSupported() {
-  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  return !!getRecognizerCtor();
 }
 
 /**
- * Listen and return final transcript text. Resolves on final result, rejects on error.
+ * Create a recognition session. Usage:
+ *   const ctl = createRecognizer({ onInterim, onFinal, onError });
+ *   ctl.start();
+ *   // later:
+ *   ctl.stop();   // stops & resolves with the final transcript (or empty)
+ *   ctl.cancel(); // stops & discards (no resolve)
  */
-function listen({ onInterim } = {}) {
-  return new Promise((resolve, reject) => {
-    const SR = getRecognizer();
-    const rec = new SR();
+function createRecognizer({ onInterim, onFinal, onError, onEnd } = {}) {
+  const SR = getRecognizerCtor();
+  if (!SR) throw new Error('当前浏览器不支持语音识别');
+
+  let rec = null;
+  let stopped = false;
+  let lastFinal = '';
+  let lastInterim = '';
+
+  function handleResult(e) {
+    let final = '';
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) final += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    if (final) lastFinal += final;
+    if (interim) lastInterim = interim;
+    if (onInterim && (final || interim)) {
+      onInterim((lastFinal + interim).trim());
+    }
+    if (final && onFinal) onFinal(final);
+  }
+
+  function build() {
+    rec = new SR();
     rec.lang = LANG;
-    rec.continuous = false;
+    rec.continuous = true;        // 关键：让我们能 stop 任意时刻
     rec.interimResults = true;
     rec.maxAlternatives = 1;
 
-    let resolved = false;
-    rec.onresult = (e) => {
-      let final = '';
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) final += r[0].transcript;
-        else interim += r[0].transcript;
-      }
-      if (interim && onInterim) onInterim(interim);
-      if (final && !resolved) {
-        resolved = true;
-        resolve(final.trim());
-        try { rec.stop(); } catch {}
-      }
-    };
+    rec.onresult = handleResult;
     rec.onerror = (e) => {
-      if (!resolved) {
-        resolved = true;
-        reject(new Error('语音识别错误：' + (e.error || 'unknown')));
-      }
+      // 'no-speech' / 'aborted' 不算真正的错误
+      if (e.error === 'aborted' || e.error === 'no-speech') return;
+      if (onError) onError(e);
     };
     rec.onend = () => {
-      if (!resolved) {
-        // No final result obtained
-        resolved = true;
-        reject(new Error('未识别到语音'));
-      }
+      // onend 会因为 stop() 或网络中断触发。处理结果由 stop() / cancel() 决定。
+      if (onEnd) onEnd({ final: lastFinal.trim(), interim: lastInterim.trim() });
     };
+  }
 
-    try {
-      rec.start();
-    } catch (err) {
-      reject(err);
-    }
+  return {
+    start() {
+      if (rec) return; // 已运行
+      lastFinal = '';
+      lastInterim = '';
+      stopped = false;
+      build();
+      try {
+        rec.start();
+      } catch (err) {
+        // 'invalid-state' 表示已经在跑
+        if (err.error && err.error.name === 'InvalidStateError') return;
+        if (onError) onError(err);
+      }
+    },
+    /** 停止并产出最终文本（不会 resolve Promise，仅触发 onEnd） */
+    stop() {
+      if (!rec) return;
+      stopped = true;
+      try { rec.stop(); } catch {}
+      rec = null;
+    },
+    /** 立刻中止，丢弃所有结果 */
+    cancel() {
+      if (!rec) return;
+      stopped = true;
+      try { rec.abort(); } catch {}
+      rec = null;
+    },
+    isRunning() { return !!rec; }
+  };
+}
 
-    // Save reference so caller can stop
-    listen._current = rec;
+// 兼容旧 API（保留以防其他 view 还在用）
+function listen({ onInterim } = {}) {
+  return new Promise((resolve, reject) => {
+    const ctl = createRecognizer({
+      onInterim,
+      onEnd: ({ final }) => {
+        if (final) resolve(final);
+        else reject(new Error('未识别到语音'));
+      }
+    });
+    ctl.start();
   });
 }
 
 function stop() {
-  const rec = listen._current;
-  if (rec) {
-    try { rec.stop(); } catch {}
-    listen._current = null;
-  }
+  // 旧 API 停止方法（兼容层）
+  // 旧版本用 listen._current，新版用 controller.stop()
+  // 由于没人再调用旧 stop，这里保留空实现
 }
-
-window.Speech = { isSupported, listen, stop };
+window.Speech = { isSupported, createRecognizer, listen, stop };
 
 
 // === js/util.js ===
@@ -440,7 +482,7 @@ window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, star
 const DB = window.DB;
 const Settings = window.Settings;
 const { extractExpenseFromText, extractExpenseFromImage } = window.LLM;
-const { isSupported: speechSupported, listen: speechListen, stop: speechStop } = window.Speech;
+const { isSupported: speechSupported, createRecognizer } = window.Speech;
 const { el, fmtDate, fmtMoney, showToast } = window.Util;
 
 
@@ -501,44 +543,119 @@ async function saveExtracted(extracted, raw) {
 }
 
 async function submitText(text) {
-  const cfg = Settings.config;
   if (!Settings.isConfigured) throw new Error('请先在「设置」中填写 Base URL / API Key / Model');
-  const extracted = await extractExpenseFromText(text);
+  const extracted = await LLM.extractExpenseFromText(text);
   return await saveExtracted(extracted, text);
 }
 
 async function submitImage(file) {
-  const cfg = Settings.config;
   if (!Settings.isConfigured) throw new Error('请先在「设置」中填写 Base URL / API Key / Model');
   const base64 = await fileToBase64(file);
-  const extracted = await extractExpenseFromImage(base64);
+  const extracted = await LLM.extractExpenseFromImage(base64);
   return await saveExtracted(extracted, '[图片]');
 }
 
-async function handleVoice() {
+// 删除一条记录（首页"已记录"卡片用）
+async function deleteRecord(r) {
+  await DB.remove(r.id);
+  if (lastSaved && lastSaved.id === r.id) {
+    lastSaved = null;
+  }
+}
+
+// ========== 语音 sheet（重写版） ==========
+function showVoiceSheet({ onSubmit, onCancel }) {
   if (!speechSupported()) {
     showToast('当前浏览器不支持语音识别');
     return;
   }
-  showVoiceSheet({
-    onCancel: () => speechStop(),
-    onConfirm: async () => {
-      try {
-        showToast('正在识别语音…', 5000);
-        const text = await speechListen();
-        if (text) {
-          // Fill into textbox and let user submit
-          showToast('已识别：' + text + '（请在文本框确认后点保存）', 4000);
-          const ta = document.getElementById('text-input');
-          if (ta) ta.value = text;
-        }
-      } catch (e) {
-        showToast(e.message || '识别失败');
-      }
+
+  const overlay = el('div', { class: 'sheet-overlay' });
+  const sheet = el('div', { class: 'sheet' });
+  const title = el('h3', {}, '语音记账');
+
+  const circle = el('div', { class: 'voice-circle' }, '🎙');
+  const time = el('div', { class: 'voice-time' }, '00:00');
+  const transcriptBox = el('div', {
+    class: 'voice-transcript',
+    style: 'min-height:48px; max-height:120px; overflow:auto; padding:10px; border-radius:8px; background:#f5f5f7; font-size:14px; margin:8px 0 16px; color:#333; white-space:pre-wrap;'
+  }, '点击麦克风开始说话');
+  const hint = el('div', { class: 'muted', style: 'font-size:11px; margin-bottom:8px;' }, '提示：可中途点 ✓ 完成，会自动把文字填到文本框');
+
+  const btnRow = el('div', { class: 'voice-buttons' });
+  const cancelBtn = el('button', { class: 'voice-btn cancel' }, '✕');
+  const toggleBtn = el('button', { class: 'voice-btn', id: 'voice-toggle' }, '🎙');
+  const confirmBtn = el('button', { class: 'voice-btn', id: 'voice-confirm' }, '✓');
+  btnRow.append(cancelBtn, toggleBtn, confirmBtn);
+
+  sheet.append(title, circle, hint, transcriptBox, time, btnRow);
+  overlay.append(sheet);
+  document.body.append(overlay);
+
+  let startedAt = 0;
+  let timer = null;
+  let lastTranscript = '';
+  const ctl = createRecognizer({
+    onInterim: (text) => {
+      lastTranscript = text;
+      transcriptBox.textContent = text || '点击麦克风开始说话';
+    },
+    onError: (e) => {
+      showToast('语音识别错误：' + (e.error || e.message || 'unknown'));
+    },
+    onEnd: ({ final }) => {
+      // 只要拿到 final 就视为成功，可点 ✓ 提交
+      if (final) lastTranscript = final;
+      transcriptBox.textContent = lastTranscript || '（未识别到）';
     }
   });
+
+  function tick() {
+    const sec = Math.floor((Date.now() - startedAt) / 1000);
+    time.textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+  }
+
+  function start() {
+    if (ctl.isRunning()) return;
+    ctl.start();
+    startedAt = Date.now();
+    circle.classList.add('recording');
+    transcriptBox.textContent = '正在听...';
+    timer = setInterval(tick, 200);
+  }
+
+  function stop() {
+    if (!ctl.isRunning()) return;
+    ctl.stop();
+    circle.classList.remove('recording');
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  function cleanup() {
+    if (ctl.isRunning()) ctl.cancel();
+    if (timer) clearInterval(timer);
+    overlay.remove();
+  }
+
+  toggleBtn.onclick = () => {
+    if (ctl.isRunning()) stop();
+    else start();
+  };
+
+  confirmBtn.onclick = () => {
+    // 拿到当前累积文本，关闭弹窗，提交到文本框
+    stop();
+    cleanup();
+    onSubmit(lastTranscript || '');
+  };
+
+  cancelBtn.onclick = () => {
+    cleanup();
+    onCancel();
+  };
 }
 
+// ========== 图片选择处理 ==========
 async function handleImageFile(file) {
   if (!file) return;
   if (!/^image\//.test(file.type)) {
@@ -570,79 +687,14 @@ function setBusy(v) {
   }
 }
 
-function showVoiceSheet({ onCancel, onConfirm }) {
-  const overlay = el('div', { class: 'sheet-overlay' });
-  const sheet = el('div', { class: 'sheet' });
-  const title = el('h3', {}, '按住 ✓ 开始 / 结束');
-  const circle = el('div', { class: 'voice-circle' }, '🎙');
-  const time = el('div', { class: 'voice-time' }, '00:00');
-  const hint = el('div', { class: 'muted', style: 'margin-bottom:12px;' }, '点击 ✓ 录音，再次点击 ✓ 结束识别');
-  const btnRow = el('div', { class: 'voice-buttons' });
-  const cancelBtn = el('button', { class: 'voice-btn cancel' }, '✕');
-  const confirmBtn = el('button', { class: 'voice-btn' }, '✓');
-  btnRow.append(cancelBtn, confirmBtn);
-  sheet.append(title, circle, hint, time, btnRow);
-  overlay.append(sheet);
-  document.body.append(overlay);
-
-  let recording = false;
-  let timer = null;
-  let startedAt = 0;
-  let lastText = '';
-
-  const tick = () => {
-    const sec = Math.floor((Date.now() - startedAt) / 1000);
-    time.textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
-  };
-
-  const startRec = async () => {
-    if (recording) return;
-    try {
-      await speechListen({
-        onInterim: (t) => { lastText = t; }
-      });
-      // If we get here it means final was returned
-    } catch (e) {
-      // ignored; we use last interim text
-    }
-  };
-
-  cancelBtn.onclick = async () => {
-    if (timer) { clearInterval(timer); timer = null; }
-    speechStop();
-    onCancel && onCancel();
-    overlay.remove();
-  };
-
-  confirmBtn.onclick = async () => {
-    if (!recording) {
-      // start
-      recording = true;
-      startedAt = Date.now();
-      circle.classList.add('recording');
-      timer = setInterval(tick, 200);
-      // async listen; resolve with text via onConfirm
-      onConfirm && onConfirm();
-      // we don't await; let onConfirm trigger the recognition
-    } else {
-      // stop
-      recording = false;
-      circle.classList.remove('recording');
-      if (timer) { clearInterval(timer); timer = null; }
-      speechStop();
-      // close immediately; recognition result toast will appear via onConfirm
-      overlay.remove();
-    }
-  };
-}
-
+// ========== 渲染入口 ==========
 function renderInput() {
   const root = document.getElementById('view');
   root.innerHTML = '';
 
   const wrap = el('div', { style: 'padding: 16px;' });
 
-  // Saved card
+  // 已记录卡片（含删除按钮）
   if (lastSaved) {
     wrap.appendChild(el('div', { class: 'saved-card' },
       el('div', { class: 'icon' }, '✅'),
@@ -653,64 +705,88 @@ function renderInput() {
       ),
       el('button', {
         class: 'delete-btn',
+        title: '删除这条记录',
         onclick: async () => {
-          await DB.remove(lastSaved.id);
-          lastSaved = null;
-          renderInput();
+          if (!confirm('确定删除这条记录？')) return;
+          try {
+            await deleteRecord(lastSaved);
+            showToast('已删除');
+            renderInput();
+          } catch (e) {
+            showToast('删除失败：' + e.message);
+          }
         }
       }, '🗑')
     ));
   }
 
-  // Input section
+  // 输入区
   wrap.appendChild(el('h2', {}, '自然语言输入'));
   wrap.appendChild(el('div', { class: 'muted', style: 'margin-bottom: 6px;' }, '直接说一句话，或用下方「语音 / 相机 / 相册」按钮提交凭证'));
   const ta = el('textarea', { id: 'text-input', class: 'text-area', placeholder: '在这里输入...' });
   wrap.appendChild(ta);
 
-  // Examples
+  // 示例
   const expWrap = el('div', { style: 'margin-top: 12px;' });
   expWrap.appendChild(el('div', { class: 'muted', style: 'margin-bottom: 4px;' }, '试试这些'));
   const expRow = el('div', { class: 'examples' });
   for (const e of EXAMPLES) {
-    const chip = el('button', { class: 'chip', onclick: () => { ta.value = e; ta.focus(); } }, e);
-    expRow.appendChild(chip);
+    expRow.appendChild(el('button', {
+      class: 'chip',
+      onclick: () => { ta.value = e; ta.focus(); }
+    }, e));
   }
   expWrap.appendChild(expRow);
   wrap.appendChild(expWrap);
 
-  // Quick actions
+  // 快捷按钮
   wrap.appendChild(el('h2', { style: 'margin-top: 16px;' }, '快速记录'));
   const actionsRow = el('div', { class: 'actions-row' });
-  const voiceBtn = el('button', { class: 'btn-action pink', onclick: handleVoice },
-    el('div', { class: 'ico' }, '🎙'),
-    el('div', {}, '语音')
-  );
   const cameraInput = el('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none' });
-  const cameraBtn = el('button', { class: 'btn-action blue', onclick: () => cameraInput.click() },
-    el('div', { class: 'ico' }, '📷'),
-    el('div', {}, '相机')
-  );
   const galleryInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
-  const galleryBtn = el('button', { class: 'btn-action green', onclick: () => galleryInput.click() },
-    el('div', { class: 'ico' }, '🖼'),
-    el('div', {}, '相册')
-  );
   cameraInput.onchange = () => { if (cameraInput.files[0]) handleImageFile(cameraInput.files[0]); };
   galleryInput.onchange = () => { if (galleryInput.files[0]) handleImageFile(galleryInput.files[0]); };
-  actionsRow.append(voiceBtn, cameraBtn, galleryBtn);
+
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action pink',
+    onclick: () => showVoiceSheet({
+      onSubmit: (text) => {
+        if (text) {
+          ta.value = text;
+          showToast('已识别：' + text);
+        } else {
+          showToast('未识别到语音');
+        }
+      },
+      onCancel: () => {}
+    })
+  }, el('div', { class: 'ico' }, '🎙'), el('div', {}, '语音')));
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action blue',
+    onclick: () => cameraInput.click()
+  }, el('div', { class: 'ico' }, '📷'), el('div', {}, '相机')));
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action green',
+    onclick: () => galleryInput.click()
+  }, el('div', { class: 'ico' }, '🖼'), el('div', {}, '相册')));
   wrap.appendChild(actionsRow);
   wrap.appendChild(cameraInput);
   wrap.appendChild(galleryInput);
 
-  // Error
+  // 错误提示
   if (lastError) {
     wrap.appendChild(el('div', { class: 'error', style: 'margin-top: 10px;' }, lastError));
   }
 
-  // Submit
-  const submitBtn = el('button', { id: 'submit-btn', class: 'btn-primary', onclick: onSubmitText }, '保存记录');
+  // 保存按钮
+  const submitBtn = el('button', {
+    id: 'submit-btn',
+    class: 'btn-primary',
+    onclick: onSubmitText
+  }, '保存记录');
   wrap.appendChild(submitBtn);
+
+  root.appendChild(wrap);
 
   async function onSubmitText() {
     const text = (ta.value || '').trim();
@@ -729,10 +805,7 @@ function renderInput() {
       setBusy(false);
     }
   }
-
-  root.appendChild(wrap);
 }
-
 window.renderInput = renderInput;
 
 })();
@@ -1102,7 +1175,22 @@ async function renderStats() {
         el('div', { class: 'name' }, r.description),
         el('div', { class: 'meta' }, `${r.category} · ${fmtYM(r.timestamp).slice(5)}-${String(new Date(r.timestamp).getDate()).padStart(2,'0')} ${String(new Date(r.timestamp).getHours()).padStart(2,'0')}:${String(new Date(r.timestamp).getMinutes()).padStart(2,'0')}`)
       ),
-      el('div', { class: 'top-amount' }, '¥' + fmtMoney(r.amount))
+      el('div', { class: 'top-amount' }, '¥' + fmtMoney(r.amount)),
+      el('button', {
+        class: 'delete-row-btn',
+        title: '删除这条记录',
+        onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm('确定删除「' + r.description + '」？')) return;
+          try {
+            await DB.remove(r.id);
+            showToast('已删除');
+            await renderStats();
+          } catch (err) {
+            showToast('删除失败：' + err.message);
+          }
+        }
+      }, '🗑')
     );
     topCard.appendChild(row);
   });
@@ -1265,7 +1353,22 @@ function renderRow(r) {
         el('div', {}, fmtMonthDay(r.timestamp) + ' ' + String(ts.getHours()).padStart(2, '0') + ':' + String(ts.getMinutes()).padStart(2, '0'))
       )
     ),
-    el('div', { class: 'amount' }, '¥' + fmtMoney(r.amount))
+    el('div', { class: 'amount' }, '¥' + fmtMoney(r.amount)),
+    el('button', {
+      class: 'delete-row-btn',
+      title: '删除这条记录',
+      onclick: async (e) => {
+        e.stopPropagation();
+        if (!confirm('确定删除「' + r.description + '」？')) return;
+        try {
+          await DB.remove(r.id);
+          showToast('已删除');
+          await renderRecords();
+        } catch (err) {
+          showToast('删除失败：' + err.message);
+        }
+      }
+    }, '🗑')
   );
 }
 

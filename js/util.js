@@ -126,3 +126,53 @@ export function exportCSV(records, columns, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast('已导出 ' + records.length + ' 条');
 }
+
+/**
+ * 解析 CSV 文本为对象数组。自动处理：
+ * - UTF-8 BOM
+ * - 双引号包裹 + 双引号转义（"" → "）
+ * - 含逗号 / 换行的字段
+ */
+export function parseCSV(text) {
+  if (!text) return { headers: [], rows: [] };
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  const rows = [];
+  let cur = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else {
+      if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        cur.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        cur.push(field); field = '';
+        if (cur.length) rows.push(cur);
+        cur = [];
+        if (c === '\r' && text[i + 1] === '\n') i++;
+      } else {
+        field += c;
+      }
+    }
+  }
+  if (field.length || cur.length) { cur.push(field); rows.push(cur); }
+
+  if (!rows.length) return { headers: [], rows: [] };
+  const headers = rows[0];
+  const data = rows.slice(1).map(r => {
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = r[idx] || ''; });
+    return obj;
+  });
+  return { headers, rows: data };
+}

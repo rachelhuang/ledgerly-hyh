@@ -95,3 +95,34 @@ export function el(tag, attrs = {}, ...children) {
   }
   return e;
 }
+
+/**
+ * 把对象数组导出为 CSV（含 BOM，Excel 直接打开不乱码）。
+ * columns: [{ key: 'name', label: '姓名' }, ...]
+ */
+export function exportCSV(records, columns, filename) {
+  if (!records.length) {
+    showToast('没有数据可导出');
+    return;
+  }
+  const esc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const header = columns.map(c => esc(c.label)).join(',');
+  const rows = records.map(r => columns.map(c => esc(c.format ? c.format(r[c.key]) : r[c.key])).join(','));
+  // ﻿ BOM 让 Excel 识别 UTF-8
+  const csv = '﻿' + header + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('已导出 ' + records.length + ' 条');
+}

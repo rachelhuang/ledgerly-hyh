@@ -1204,6 +1204,7 @@ function drawChartFallback(canvas, points, labelFmt, isYear) {
 }
 
 function renderStatCard(label, value, klass) {
+  return el('div', { class: 'stat ' + klass },
     el('div', { class: 'label' }, label),
     el('div', { class: 'value' }, value)
   );

@@ -108,7 +108,7 @@ export async function renderRecords() {
           { key: 'rawInput', label: '原始输入' }
         ], 'ledgerly_' + stamp + '.csv');
       }
-    }, '📥 导出 CSV')
+    }, '📤 导出 CSV')
   ));
 
   if (!recs.length) {

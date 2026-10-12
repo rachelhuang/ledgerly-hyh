@@ -132,6 +132,7 @@ export function exportCSV(records, columns, filename) {
  * - UTF-8 BOM
  * - 双引号包裹 + 双引号转义（"" → "）
  * - 含逗号 / 换行的字段
+ * - 空行
  */
 export function parseCSV(text) {
   if (!text) return { headers: [], rows: [] };
@@ -157,7 +158,7 @@ export function parseCSV(text) {
         cur.push(field); field = '';
       } else if (c === '\n' || c === '\r') {
         cur.push(field); field = '';
-        if (cur.length) rows.push(cur);
+        if (cur.length > 1 || (cur.length === 1 && cur[0])) rows.push(cur);
         cur = [];
         if (c === '\r' && text[i + 1] === '\n') i++;
       } else {
@@ -175,4 +176,59 @@ export function parseCSV(text) {
     return obj;
   });
   return { headers, rows: data };
+}
+
+/**
+ * 解析各种格式的金额字符串：
+ * - "128" / "128.0" / "128.00"
+ * - "1,280" / "1,280.00"（带千分位逗号）
+ * - "¥128" / "$128" / "￥128.00"
+ * - "128 元"
+ * 返回数字；解析失败返回 0。
+ */
+export function parseAmount(s) {
+  if (s == null) return 0;
+  let t = String(s).trim();
+  if (!t) return 0;
+  // 去掉货币符号 / 单位
+  t = t.replace(/[¥￥$€£￥]/g, '').replace(/元|块|RMB/gi, '').trim();
+  // 去千分位逗号
+  t = t.replace(/,/g, '');
+  // 去尾部单点后缀（如 "128.0" → 128）
+  if (/^\d+\.\d*0+$/.test(t)) t = t.replace(/\.?0+$/, '');
+  // 留首个合法数字串
+  const m = t.match(/-?\d+(\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+
+/**
+ * 解析日期字符串，兼容多种格式：
+ * - ISO 8601: 2026-10-12T14:30:00.000Z / 2026-10-12 14:30:00
+ * - 中文: 2026/10/12 14:30 / 2026年10月12日 14:30
+ * - 美式: 10/12/2026 2:30 PM
+ * 失败返回 null。
+ */
+export function parseDate(s) {
+  if (!s) return null;
+  let t = String(s).trim();
+  if (!t) return null;
+  // 直接试 Date 构造
+  let parsed = new Date(t);
+  if (!isNaN(parsed.getTime())) return parsed;
+  // 替换中文 / 美式
+  t = t.replace(/年|月/g, '/').replace(/日/g, ' ');
+  // 10/12/2026 2:30 PM → 2026-10-12 14:30
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (m) {
+    let [, mm, dd, yyyy, hh, mi, ss, ap] = m;
+    let H = parseInt(hh, 10);
+    if (ap) {
+        const isPM = ap.toUpperCase() === 'PM';
+        if (isPM && H < 12) H += 12;
+        if (!isPM && H === 12) H = 0;
+      }
+    const yr = yyyy.length === 2 ? 2000 + parseInt(yyyy, 10) : parseInt(yyyy, 10);
+    return new Date(yr, parseInt(mm, 10) - 1, parseInt(dd, 10), H, parseInt(mi, 10), ss ? parseInt(ss, 10) : 0);
+  }
+  return null;
 }

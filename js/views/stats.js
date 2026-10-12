@@ -162,8 +162,9 @@ function drawChart(canvas, points, labelFmt, isYear) {
   }
 
   try {
+  // 用 category scale（不用 time scale，避免依赖 chartjs-adapter）
   const data = points.map(p => ({
-    x: p.date.getTime(),
+    x: labelFmt(p.date),
     y: p.total
   }));
 
@@ -176,6 +177,7 @@ function drawChart(canvas, points, labelFmt, isYear) {
   canvas._chartInstance = new window.Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
+      labels: points.map(p => labelFmt(p.date)),
       datasets: [{
         label: '消费金额',
         data: data,
@@ -206,21 +208,21 @@ function drawChart(canvas, points, labelFmt, isYear) {
           padding: 8,
           displayColors: false,
           callbacks: {
-            title: (items) => labelFmt(new Date(items[0].parsed.x)),
             label: (item) => '¥' + fmtMoney(item.parsed.y)
           }
         }
       },
       scales: {
         x: {
-          type: 'time',
-          time: {
-            unit: isYear ? 'month' : 'day',
-            tooltipFormat: isYear ? 'yyyy年MM月' : 'MM月dd日',
-            displayFormats: { day: 'MM-dd', month: 'yy-MM' }
-          },
+          type: 'category',
           grid: { display: false },
-          ticks: { color: '#666', font: { size: 11 }, maxRotation: 0, autoSkipPadding: 18 }
+          ticks: {
+            color: '#666',
+            font: { size: 11 },
+            maxRotation: 0,
+            autoSkipPadding: 18,
+            autoSkip: true
+          }
         },
         y: {
           beginAtZero: true,

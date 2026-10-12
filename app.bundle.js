@@ -510,6 +510,7 @@ function exportCSV(records, columns, filename) {
  * - UTF-8 BOM
  * - 双引号包裹 + 双引号转义（"" → "）
  * - 含逗号 / 换行的字段
+ * - 空行
  */
 function parseCSV(text) {
   if (!text) return { headers: [], rows: [] };
@@ -535,7 +536,7 @@ function parseCSV(text) {
         cur.push(field); field = '';
       } else if (c === '\n' || c === '\r') {
         cur.push(field); field = '';
-        if (cur.length) rows.push(cur);
+        if (cur.length > 1 || (cur.length === 1 && cur[0])) rows.push(cur);
         cur = [];
         if (c === '\r' && text[i + 1] === '\n') i++;
       } else {
@@ -555,7 +556,62 @@ function parseCSV(text) {
   return { headers, rows: data };
 }
 
-window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el, exportCSV, parseCSV };
+/**
+ * 解析各种格式的金额字符串：
+ * - "128" / "128.0" / "128.00"
+ * - "1,280" / "1,280.00"（带千分位逗号）
+ * - "¥128" / "$128" / "￥128.00"
+ * - "128 元"
+ * 返回数字；解析失败返回 0。
+ */
+function parseAmount(s) {
+  if (s == null) return 0;
+  let t = String(s).trim();
+  if (!t) return 0;
+  // 去掉货币符号 / 单位
+  t = t.replace(/[¥￥$€£￥]/g, '').replace(/元|块|RMB/gi, '').trim();
+  // 去千分位逗号
+  t = t.replace(/,/g, '');
+  // 去尾部单点后缀（如 "128.0" → 128）
+  if (/^\d+\.\d*0+$/.test(t)) t = t.replace(/\.?0+$/, '');
+  // 留首个合法数字串
+  const m = t.match(/-?\d+(\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+
+/**
+ * 解析日期字符串，兼容多种格式：
+ * - ISO 8601: 2026-10-12T14:30:00.000Z / 2026-10-12 14:30:00
+ * - 中文: 2026/10/12 14:30 / 2026年10月12日 14:30
+ * - 美式: 10/12/2026 2:30 PM
+ * 失败返回 null。
+ */
+function parseDate(s) {
+  if (!s) return null;
+  let t = String(s).trim();
+  if (!t) return null;
+  // 直接试 Date 构造
+  let parsed = new Date(t);
+  if (!isNaN(parsed.getTime())) return parsed;
+  // 替换中文 / 美式
+  t = t.replace(/年|月/g, '/').replace(/日/g, ' ');
+  // 10/12/2026 2:30 PM → 2026-10-12 14:30
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (m) {
+    let [, mm, dd, yyyy, hh, mi, ss, ap] = m;
+    let H = parseInt(hh, 10);
+    if (ap) {
+        const isPM = ap.toUpperCase() === 'PM';
+        if (isPM && H < 12) H += 12;
+        if (!isPM && H === 12) H = 0;
+      }
+    const yr = yyyy.length === 2 ? 2000 + parseInt(yyyy, 10) : parseInt(yyyy, 10);
+    return new Date(yr, parseInt(mm, 10) - 1, parseInt(dd, 10), H, parseInt(mi, 10), ss ? parseInt(ss, 10) : 0);
+  }
+  return null;
+}
+
+window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el, exportCSV, parseCSV, parseAmount, parseDate };
 
 
 // === js/views/input.js ===
@@ -1583,7 +1639,7 @@ window.renderRecords = renderRecords;
 (function() {
 const Settings = window.Settings;
 const { testConnection } = window.LLM;
-const { el, showToast, exportCSV, parseCSV } = window.Util;
+const { el, showToast, exportCSV, parseCSV, parseAmount, parseDate } = window.Util;
 const DB = window.DB;
 
 
@@ -1779,35 +1835,57 @@ async function renderSettings() {
 
   async function importAllData(file) {
     try {
-      const text = await file.text();
+      // 优先用 UTF-8 读，失败回退 GBK（Numbers 中文导出有时用 Mac Roman / GBK）
+      let text;
+      try {
+        text = await file.text();
+        // 简单的"看起来是中文乱码"检测：UTF-8 里不应该有 "Ã©" "â€" 这类序列
+        if (/[Ã©â‚¬]/.test(text)) throw new Error('encoding');
+      } catch (e) {
+        text = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result || ''));
+          r.onerror = () => reject(r.error);
+          r.readAsText(file, 'GBK');
+        });
+      }
       const { headers, rows } = parseCSV(text);
       if (!rows.length) { showToast('CSV 没有数据'); return; }
       const colMap = {};
       headers.forEach(h => {
         const lh = h.trim().toLowerCase();
-        if (lh.includes('时间') || lh === 'timestamp' || lh === 'date') colMap.timestamp = h;
-        if (lh.includes('类别') || lh === 'category' || lh === 'cat') colMap.category = h;
-        if (lh.includes('描述') || lh === 'description' || lh === 'desc') colMap.description = h;
-        if (lh.includes('金额') || lh === 'amount') colMap.amount = h;
-        if (lh.includes('原始') || lh === 'rawinput' || lh === 'raw') colMap.rawInput = h;
+        if (lh.includes('时间') || lh.includes('日期') || lh === 'timestamp' || lh === 'date') colMap.timestamp = h;
+        if (lh.includes('类别') || lh === 'category' || lh === 'cat' || lh === 'type') colMap.category = h;
+        if (lh.includes('描述') || lh === 'description' || lh === 'desc' || lh === 'note') colMap.description = h;
+        if (lh.includes('金额') || lh === 'amount' || lh === 'value' || lh === 'price') colMap.amount = h;
+        if (lh.includes('原始') || lh === 'rawinput' || lh === 'raw' || lh === 'input') colMap.rawInput = h;
       });
-      if (!colMap.amount) { showToast('找不到金额列'); return; }
+      if (!colMap.amount) {
+        // 尝试自动猜测：第一列（除标题外）通常含数字 → 假设是金额
+        const numericCols = headers.filter(h => {
+          const sample = rows.slice(0, 3).map(r => r[h]).join(',');
+          return parseAmount(sample) > 0;
+        });
+        if (numericCols.length) {
+          colMap.amount = numericCols[0];
+          showToast('自动识别金额列：' + colMap.amount);
+        } else {
+          showToast('找不到金额列，请检查 CSV 文件');
+          return;
+        }
+      }
       const existing = await DB.getAll();
       const existingKeys = new Set(existing.map(r =>
         (r.timestamp || '') + '|' + (r.description || '') + '|' + String(r.amount)
       ));
       let added = 0, skipped = 0;
       for (const row of rows) {
-        const amount = Number(String(row[colMap.amount] || '').replace(/[^0-9.\-]/g, ''));
+        const amount = parseAmount(row[colMap.amount]);
         if (!amount || amount <= 0) { skipped++; continue; }
         const tsRaw = row[colMap.timestamp] || '';
-        let tsIso;
-        if (tsRaw && !isNaN(new Date(tsRaw).getTime())) {
-          tsIso = new Date(tsRaw).toISOString();
-        } else {
-          tsIso = new Date().toISOString();
-        }
-        const desc = (row[colMap.description] || row[colMap.category] || '导入').trim();
+        let parsedDate = parseDate(tsRaw);
+        let tsIso = parsedDate ? parsedDate.toISOString() : new Date().toISOString();
+        const desc = (row[colMap.description] || row[colMap.category] || '导入').trim() || '导入';
         const key = tsIso + '|' + desc + '|' + String(amount);
         if (existingKeys.has(key)) { skipped++; continue; }
         await DB.add({

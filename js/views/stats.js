@@ -308,7 +308,6 @@ function drawChartFallback(canvas, points, labelFmt, isYear) {
 }
 
 function renderStatCard(label, value, klass) {
-  return el('div', { class: 'stat ' + klass },
     el('div', { class: 'label' }, label),
     el('div', { class: 'value' }, value)
   );
@@ -371,6 +370,10 @@ export async function renderStats() {
   const canvas = el('canvas', { style: 'width: 100%; height: 220px;' });
   chartCard.appendChild(canvas);
   wrap.appendChild(chartCard);
+
+  // 分类饼图
+  const pieCard = renderCategoryPieCard(cur.items);
+  wrap.appendChild(pieCard);
 
   // top 10
   const topCard = el('div', { class: 'card' });

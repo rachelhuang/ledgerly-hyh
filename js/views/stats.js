@@ -314,6 +314,85 @@ function renderStatCard(label, value, klass) {
   );
 }
 
+// 分类消费饼图（环形）
+function renderCategoryPieCard(items) {
+  const card = el('div', { class: 'card chart-card' });
+  const header = el('div', { style: 'display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;' });
+  header.append(
+    el('div', {}, '分类消费统计'),
+    el('span', { class: 'chart-tag' }, '饼图')
+  );
+  card.appendChild(header);
+
+  // 聚合分类
+  const sums = {};
+  items.forEach(r => { sums[r.category] = (sums[r.category] || 0) + Number(r.amount); });
+  const entries = Object.entries(sums).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    card.appendChild(el('div', { class: 'muted', style: 'padding: 24px 0; text-align: center;' }, '该周期无数据'));
+    return card;
+  }
+
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  const palette = ['#3c5066', '#f08c00', '#2f9e44', '#d6336c', '#4c6ef5', '#868e96', '#fab005', '#7950f2'];
+  const canvas = el('canvas', { style: 'width: 100%; height: 220px;' });
+  card.appendChild(canvas);
+
+  // 列表（饼图下方显示具体数字 + 百分比）
+  const list = el('div', { style: 'margin-top: 12px;' });
+  entries.forEach((e, idx) => {
+    const pct = total > 0 ? (e[1] / total * 100).toFixed(1) : '0';
+    list.appendChild(el('div', { style: 'display:flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px;' },
+      el('div', { style: `width: 12px; height: 12px; border-radius: 2px; background: ${palette[idx % palette.length]};` }),
+      el('div', { style: 'flex: 1;' }, e[0]),
+      el('div', { style: 'color: #666; font-size: 12px;' }, pct + '%'),
+      el('div', { style: 'font-weight: 600; font-variant-numeric: tabular-nums;' }, '¥' + fmtMoney(e[1]))
+    ));
+  });
+  card.appendChild(list);
+
+  // 等 DOM 挂上后再绘制
+  setTimeout(() => {
+    if (!window.Chart || window.__chartLoadFailed) return;
+    if (canvas._pieInstance) canvas._pieInstance.destroy();
+    canvas._pieInstance = new window.Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: entries.map(e => e[0]),
+        datasets: [{
+          data: entries.map(e => e[1]),
+          backgroundColor: palette.slice(0, entries.length),
+          borderColor: '#fff',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            titleFont: { size: 12 },
+            bodyFont: { size: 13, weight: '600' },
+            padding: 8,
+            callbacks: {
+              label: (item) => {
+                const t = item.dataset.data.reduce((a, b) => a + b, 0);
+                const pct = t > 0 ? (item.parsed / t * 100).toFixed(1) : 0;
+                return item.label + ': ¥' + fmtMoney(item.parsed) + ' (' + pct + '%)';
+              }
+            }
+          }
+        }
+      }
+    });
+  }, 0);
+
+  return card;
+}
+
 export async function renderStats() {
   await loadRecords();
   const root = document.getElementById('view');

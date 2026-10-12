@@ -505,7 +505,57 @@ function exportCSV(records, columns, filename) {
   showToast('已导出 ' + records.length + ' 条');
 }
 
-window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el, exportCSV };
+/**
+ * 解析 CSV 文本为对象数组。自动处理：
+ * - UTF-8 BOM
+ * - 双引号包裹 + 双引号转义（"" → "）
+ * - 含逗号 / 换行的字段
+ */
+function parseCSV(text) {
+  if (!text) return { headers: [], rows: [] };
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  const rows = [];
+  let cur = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else {
+      if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        cur.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        cur.push(field); field = '';
+        if (cur.length) rows.push(cur);
+        cur = [];
+        if (c === '\r' && text[i + 1] === '\n') i++;
+      } else {
+        field += c;
+      }
+    }
+  }
+  if (field.length || cur.length) { cur.push(field); rows.push(cur); }
+
+  if (!rows.length) return { headers: [], rows: [] };
+  const headers = rows[0];
+  const data = rows.slice(1).map(r => {
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = r[idx] || ''; });
+    return obj;
+  });
+  return { headers, rows: data };
+}
+
+window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el, exportCSV, parseCSV };
 
 
 // === js/views/input.js ===
@@ -1154,7 +1204,6 @@ function drawChartFallback(canvas, points, labelFmt, isYear) {
 }
 
 function renderStatCard(label, value, klass) {
-  return el('div', { class: 'stat ' + klass },
     el('div', { class: 'label' }, label),
     el('div', { class: 'value' }, value)
   );
@@ -1217,6 +1266,10 @@ async function renderStats() {
   const canvas = el('canvas', { style: 'width: 100%; height: 220px;' });
   chartCard.appendChild(canvas);
   wrap.appendChild(chartCard);
+
+  // 分类饼图
+  const pieCard = renderCategoryPieCard(cur.items);
+  wrap.appendChild(pieCard);
 
   // top 10
   const topCard = el('div', { class: 'card' });
@@ -1382,7 +1435,7 @@ async function renderRecords() {
           { key: 'rawInput', label: '原始输入' }
         ], 'ledgerly_' + stamp + '.csv');
       }
-    }, '📥 导出 CSV')
+    }, '📤 导出 CSV')
   ));
 
   if (!recs.length) {
@@ -1450,7 +1503,9 @@ window.renderRecords = renderRecords;
 (function() {
 const Settings = window.Settings;
 const { testConnection } = window.LLM;
-const { el } = window.Util;
+const { el, showToast, exportCSV, parseCSV } = window.Util;
+const DB = window.DB;
+
 
 
 
@@ -1563,7 +1618,44 @@ function renderSettings() {
   ));
   wrap.appendChild(sec5);
 
+  // 数据安全（导出全部数据）
+  const sec6 = el('div', { class: 'section' });
+  sec6.appendChild(el('h3', {}, '数据备份与恢复'));
+  sec6.appendChild(el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap;' },
+    el('button', {
+      class: 'btn-primary',
+      style: 'flex: 1; min-width: 140px;',
+      onclick: exportAllData
+    }, '📤 导出 CSV'),
+    el('input', { type: 'file', accept: '.csv,text/csv', style: 'display:none', id: 'csv-import-input-settings' }),
+    el('button', {
+      class: 'btn-primary',
+      style: 'flex: 1; min-width: 140px; background: #2f9e44;',
+      onclick: () => document.getElementById('csv-import-input-settings').click()
+    }, '📥 导入 CSV')
+  ));
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 6px;' },
+    '💡 备份流程：导出 CSV → 保存到云端 → 删除旧 PWA → 装新 PWA → 设置页导入 CSV'
+  ));
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 4px; color: #2f9e44;' },
+    '✅ 导入时自动去重（同时间+描述+金额视为重复）'
+  ));
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 8px; color: #f08c00;' },
+    '⚠️ Safari「清除网站数据」/ 卸载 PWA 会清空 IndexedDB，请定期备份！'
+  ));
+  wrap.appendChild(sec6);
+
   root.appendChild(wrap);
+
+  // CSV 导入 input 绑定
+  const csvInput = document.getElementById('csv-import-input-settings');
+  if (csvInput) {
+    csvInput.onchange = (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) importAllData(file);
+      csvInput.value = '';
+    };
+  }
 
   updateStatus();
 
@@ -1605,6 +1697,117 @@ function renderSettings() {
       resultLine.textContent = lastResult.msg;
     }
   }
+
+  async function exportAllData() {
+    try {
+      const all = await DB.getAll();
+      const stamp = new Date().toISOString().slice(0, 10);
+      exportCSV(all, [
+        { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+        { key: 'category', label: '类别' },
+        { key: 'description', label: '描述' },
+        { key: 'amount', label: '金额(元)' },
+        { key: 'rawInput', label: '原始输入' }
+      ], 'ledgerly_full_backup_' + stamp + '.csv');
+    } catch (e) {
+      showToast('导出失败：' + e.message);
+    }
+  }
+
+  async function importAllData(file) {
+    try {
+      const text = await file.text();
+      const { headers, rows } = parseCSV(text);
+      if (!rows.length) {
+        showToast('CSV 没有数据');
+        return;
+      }
+      // 列名映射（兼容导出格式 + 常见变体）
+      const colMap = {};
+      headers.forEach(h => {
+        const lh = h.trim().toLowerCase();
+        if (lh.includes('时间') || lh === 'timestamp' || lh === 'date') colMap.timestamp = h;
+        if (lh.includes('类别') || lh === 'category' || lh === 'cat') colMap.category = h;
+        if (lh.includes('描述') || lh === 'description' || lh === 'desc') colMap.description = h;
+        if (lh.includes('金额') || lh === 'amount') colMap.amount = h;
+        if (lh.includes('原始') || lh === 'rawinput' || lh === 'raw') colMap.rawInput = h;
+      });
+      if (!colMap.amount) {
+        showToast('找不到金额列（"金额"或 "amount"）');
+        return;
+      }
+      const existing = await DB.getAll();
+      const existingKeys = new Set(existing.map(r =>
+        (r.timestamp || '') + '|' + (r.description || '') + '|' + String(r.amount)
+      ));
+      let added = 0, skipped = 0;
+      for (const row of rows) {
+        const amount = Number(String(row[colMap.amount] || '').replace(/[^0-9.\-]/g, ''));
+        if (!amount || amount <= 0) { skipped++; continue; }
+        const tsRaw = row[colMap.timestamp] || '';
+        let tsIso;
+        if (tsRaw && !isNaN(new Date(tsRaw).getTime())) {
+          tsIso = new Date(tsRaw).toISOString();
+        } else {
+          tsIso = new Date().toISOString();
+        }
+        const desc = (row[colMap.description] || row[colMap.category] || '导入').trim();
+        // 去重：同 timestamp + description + amount 视为同一条
+        const key = tsIso + '|' + desc + '|' + String(amount);
+        if (existingKeys.has(key)) { skipped++; continue; }
+        const record = {
+          id: crypto.randomUUID(),
+          timestamp: tsIso,
+          category: (row[colMap.category] || '其他').trim() || '其他',
+          amount: amount,
+          description: desc,
+          rawInput: (row[colMap.rawInput] || '[CSV导入]').trim(),
+          createdAt: new Date().toISOString()
+        };
+        await DB.add(record);
+        existingKeys.add(key);
+        added++;
+      }
+      showToast(`导入完成：${added} 条新增，${skipped} 条跳过（重复/无效）`);
+      renderSettings();
+    } catch (e) {
+      showToast('导入失败：' + e.message);
+    }
+  }
+
+  // 加载数据完整性信息
+  let dataStatus = { count: 0, latest: '无' };
+  try {
+    const all = await DB.getAll();
+    dataStatus.count = all.length;
+    if (all.length) {
+      const latest = all.reduce((m, r) => r.createdAt > m ? r.createdAt : m, all[0].createdAt);
+      dataStatus.latest = new Date(latest).toLocaleString('zh-CN');
+    }
+  } catch (e) {
+    dataStatus = { count: -1, latest: '读取失败：' + e.message };
+  }
+
+  // 数据完整性
+  const sec7 = el('div', { class: 'section' });
+  sec7.appendChild(el('h3', {}, '📊 数据完整性'));
+  sec7.appendChild(el('div', { class: 'field' },
+    el('div', { style: 'display:flex; justify-content:space-between; padding: 4px 0;' },
+      el('span', { class: 'muted' }, '当前记录数'),
+      el('span', { style: 'font-weight:600; font-size:16px;' }, dataStatus.count >= 0 ? dataStatus.count + ' 条' : '读取失败')
+    ),
+    el('div', { style: 'display:flex; justify-content:space-between; padding: 4px 0;' },
+      el('span', { class: 'muted' }, '最近写入'),
+      el('span', { style: 'font-size:13px;' }, dataStatus.latest)
+    )
+  ));
+  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top: 8px;' },
+    '💡 升级 PWA 后回来对比这两个数字，应该保持不变。'
+  ));
+  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top: 4px; color: #2f9e44;' },
+    '✅ PWA 应用更新不会清空数据（IndexedDB 与 SW 缓存独立）。'
+  ));
+  wrap.appendChild(sec7);
 }
 
 window.renderSettings = renderSettings;

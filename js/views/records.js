@@ -1,5 +1,5 @@
 import * as DB from '../db.js';
-import { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToast } from '../util.js';
+import { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToast, exportCSV } from '../util.js';
 
 let allRecords = [];
 let search = '';
@@ -95,8 +95,20 @@ export async function renderRecords() {
   const recs = filtered();
   const total = recs.reduce((s, r) => s + Number(r.amount), 0);
   wrap.appendChild(el('div', { class: 'summary-line' },
-    el('span', {}, `共 ${recs.length} 笔`),
-    el('span', {}, `合计 ¥${fmtMoney(total)}`)
+    el('span', {}, `共 ${recs.length} 笔 · 合计 ¥${fmtMoney(total)}`),
+    el('button', {
+      class: 'export-btn',
+      onclick: () => {
+        const stamp = new Date().toISOString().slice(0, 10);
+        exportCSV(recs, [
+          { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+          { key: 'category', label: '类别' },
+          { key: 'description', label: '描述' },
+          { key: 'amount', label: '金额(元)' },
+          { key: 'rawInput', label: '原始输入' }
+        ], 'ledgerly_' + stamp + '.csv');
+      }
+    }, '📥 导出 CSV')
   ));
 
   if (!recs.length) {
@@ -137,6 +149,21 @@ function renderRow(r) {
         el('div', {}, fmtMonthDay(r.timestamp) + ' ' + String(ts.getHours()).padStart(2, '0') + ':' + String(ts.getMinutes()).padStart(2, '0'))
       )
     ),
-    el('div', { class: 'amount' }, '¥' + fmtMoney(r.amount))
+    el('div', { class: 'amount' }, '¥' + fmtMoney(r.amount)),
+    el('button', {
+      class: 'delete-row-btn',
+      title: '删除这条记录',
+      onclick: async (e) => {
+        e.stopPropagation();
+        if (!confirm('确定删除「' + r.description + '」？')) return;
+        try {
+          await DB.remove(r.id);
+          showToast('已删除');
+          await renderRecords();
+        } catch (err) {
+          showToast('删除失败：' + err.message);
+        }
+      }
+    }, '🗑')
   );
 }

@@ -48,7 +48,8 @@
   </div>
 
   <!-- 所有 JS 合并到一个文件，无 ES module 依赖 -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"
+          onerror="window.__chartLoadFailed=true;"></script>
   <script src="./app.bundle.js"></script>
 </body>
 </html>

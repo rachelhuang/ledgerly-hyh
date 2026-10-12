@@ -152,132 +152,85 @@ function monthPoints(bucket) {
 }
 
 function drawChart(canvas, points, labelFmt, isYear) {
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
-  ctx.scale(dpr, dpr);
-
-  const padL = 44, padR = 16, padT = 16, padB = 28;
-  const W0 = W - padL - padR, H0 = H - padT - padB;
-
-  ctx.clearRect(0, 0, W, H);
-
   if (!points.length) return;
-
-  const maxV = Math.max(...points.map(p => p.total), 1);
-  const xStep = points.length > 1 ? W0 / (points.length - 1) : 0;
-  const yFor = v => padT + H0 - (v / maxV) * H0;
-
-  // grid
-  ctx.strokeStyle = '#eee';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padT + (H0 * i / 4);
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(padL + W0, y);
-    ctx.stroke();
-    ctx.fillStyle = '#999';
-    ctx.font = '10px -apple-system';
-    ctx.textAlign = 'right';
-    ctx.fillText(String(Math.round(maxV * (1 - i / 4))), padL - 6, y + 3);
+  if (!window.Chart) {
+    // CDN 加载失败，回退到原始 Canvas 实现
+    showToast('Chart.js 加载失败');
+    return;
   }
 
-  // line
-  ctx.strokeStyle = '#3c5066';
-  ctx.lineWidth = 2.5;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = padL + i * xStep;
-    const y = yFor(p.total);
-    if (i === 0) ctx.moveTo(x, y);
-    else {
-      const px = padL + (i - 1) * xStep;
-      const py = yFor(points[i - 1].total);
-      const mx = (px + x) / 2;
-      ctx.bezierCurveTo(mx, py, mx, y, x, y);
+  const data = points.map(p => ({
+    x: p.date.getTime(),
+    y: p.total
+  }));
+
+  // 销毁旧实例（避免内存泄漏 + 多次切换 bucket 后累积）
+  if (canvas._chartInstance) {
+    canvas._chartInstance.destroy();
+    canvas._chartInstance = null;
+  }
+
+  canvas._chartInstance = new window.Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: '消费金额',
+        data: data,
+        borderColor: '#3c5066',
+        backgroundColor: 'rgba(60, 80, 102, 0.08)',
+        borderWidth: 2.5,
+        tension: 0.3,
+        pointRadius: ctx => ctx.raw && ctx.raw.y > 0 ? 4 : 0,
+        pointHoverRadius: 6,
+        pointBackgroundColor: '#3c5066',
+        pointBorderColor: '#fff',
+        pointBorderWidth: 1.5,
+        fill: true,
+        spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      animation: { duration: 350 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(0,0,0,0.85)',
+          titleFont: { size: 12 },
+          bodyFont: { size: 13, weight: '600' },
+          padding: 8,
+          displayColors: false,
+          callbacks: {
+            title: (items) => labelFmt(new Date(items[0].parsed.x)),
+            label: (item) => '¥' + fmtMoney(item.parsed.y)
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: isYear ? 'month' : 'day',
+            tooltipFormat: isYear ? 'yyyy年MM月' : 'MM月dd日',
+            displayFormats: { day: 'MM-dd', month: 'yy-MM' }
+          },
+          grid: { display: false },
+          ticks: { color: '#666', font: { size: 11 }, maxRotation: 0, autoSkipPadding: 18 }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(0,0,0,0.06)' },
+          ticks: {
+            color: '#666',
+            font: { size: 11 },
+            callback: (v) => '¥' + v
+          }
+        }
+      }
     }
   });
-  ctx.stroke();
-
-  // points (only > 0)
-  ctx.fillStyle = '#3c5066';
-  points.forEach((p, i) => {
-    if (p.total <= 0) return;
-    const x = padL + i * xStep;
-    const y = yFor(p.total);
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // x labels (sample 6 evenly)
-  ctx.fillStyle = '#666';
-  ctx.font = '10px -apple-system';
-  ctx.textAlign = 'center';
-  const labelCount = Math.min(6, points.length);
-  for (let i = 0; i < labelCount; i++) {
-    const idx = Math.round((points.length - 1) * (i / Math.max(1, labelCount - 1)));
-    const p = points[idx];
-    const x = padL + idx * xStep;
-    ctx.fillText(labelFmt(p.date), x, padT + H0 + 14);
-  }
-
-  // hover / drag
-  canvas.onmousemove = canvas.ontouchmove = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-    if (cx < padL || cx > padL + W0) return;
-    const ratio = (cx - padL) / W0;
-    const idx = Math.round(ratio * (points.length - 1));
-    const nearest = points
-      .map((p, i) => ({ p, i }))
-      .filter(({ p }) => p.total > 0)
-      .sort((a, b) => Math.abs(a.i - idx) - Math.abs(b.i - idx))[0];
-    if (!nearest) return;
-    showTooltip(canvas, nearest.p, labelFmt, isYear);
-  };
-  canvas.onmouseleave = canvas.ontouchend = () => {
-    hideTooltip();
-  };
-}
-
-let _tooltip = null;
-function ensureTooltip() {
-  if (!_tooltip) {
-    _tooltip = el('div', { class: 'chart-tooltip', style: 'display:none' });
-    document.body.appendChild(_tooltip);
-  }
-  return _tooltip;
-}
-function showTooltip(canvas, point, labelFmt, isYear) {
-  const tip = ensureTooltip();
-  const dateStr = isYear
-    ? `${point.date.getFullYear()}年${point.date.getMonth() + 1}月`
-    : `${point.date.getMonth() + 1}月${point.date.getDate()}日`;
-  tip.innerHTML = `<div style="color:#666;">${dateStr}</div><div style="font-weight:600;">¥${fmtMoney(point.total)}</div>`;
-  const rect = canvas.getBoundingClientRect();
-  const padL = 44;
-  const W0 = rect.width - padL - 16;
-  const xStep = W0 / Math.max(1, bucketize().find(b => b.key === selectedBucketKey)?.items.length || 1);
-  const ratio = (point.date - new Date(bucketize()[0]?.key || Date.now())) / (1000 * 86400);
-  // simple approx positioning
-  tip.style.left = (rect.left + padL + (xStep * indexOf(bucketize().find(b => b.key === selectedBucketKey)?.items, point))) + 'px';
-  tip.style.top = (rect.top + 14) + 'px';
-  tip.style.display = 'block';
-}
-
-function indexOf(arr, item) {
-  if (!arr) return 0;
-  const day = item.date.toISOString().slice(0, 10);
-  return arr.findIndex(r => new Date(r.timestamp).toISOString().slice(0, 10) === day);
-}
-
-function hideTooltip() {
-  if (_tooltip) _tooltip.style.display = 'none';
 }
 
 function renderStatCard(label, value, klass) {
@@ -360,7 +313,22 @@ export async function renderStats() {
         el('div', { class: 'name' }, r.description),
         el('div', { class: 'meta' }, `${r.category} · ${fmtYM(r.timestamp).slice(5)}-${String(new Date(r.timestamp).getDate()).padStart(2,'0')} ${String(new Date(r.timestamp).getHours()).padStart(2,'0')}:${String(new Date(r.timestamp).getMinutes()).padStart(2,'0')}`)
       ),
-      el('div', { class: 'top-amount' }, '¥' + fmtMoney(r.amount))
+      el('div', { class: 'top-amount' }, '¥' + fmtMoney(r.amount)),
+      el('button', {
+        class: 'delete-row-btn',
+        title: '删除这条记录',
+        onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm('确定删除「' + r.description + '」？')) return;
+          try {
+            await DB.remove(r.id);
+            showToast('已删除');
+            await renderStats();
+          } catch (err) {
+            showToast('删除失败：' + err.message);
+          }
+        }
+      }, '🗑')
     );
     topCard.appendChild(row);
   });

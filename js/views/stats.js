@@ -153,12 +153,15 @@ function monthPoints(bucket) {
 
 function drawChart(canvas, points, labelFmt, isYear) {
   if (!points.length) return;
-  if (!window.Chart) {
-    // CDN 加载失败，回退到原始 Canvas 实现
-    showToast('Chart.js 加载失败');
+
+  // Chart.js 没加载成功时（CDN 慢/被墙/CDN 故障），回退到 Canvas 自绘
+  if (!window.Chart || window.__chartLoadFailed) {
+    console.warn('Chart.js 未加载，回退到 Canvas 自绘');
+    drawChartFallback(canvas, points, labelFmt, isYear);
     return;
   }
 
+  try {
   const data = points.map(p => ({
     x: p.date.getTime(),
     y: p.total
@@ -231,6 +234,75 @@ function drawChart(canvas, points, labelFmt, isYear) {
       }
     }
   });
+  } catch (err) {
+    console.error('Chart.js 初始化失败:', err);
+    if (window.showError) window.showError('Chart 初始化失败', err.stack || err.message);
+    drawChartFallback(canvas, points, labelFmt, isYear);
+  }
+}
+
+// 简易 Canvas 折线图（Chart.js 失败时的回退）
+function drawChartFallback(canvas, points, labelFmt, isYear) {
+  if (canvas._chartInstance) { canvas._chartInstance = null; }
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  if (!points.length) return;
+
+  const padL = 36, padR = 12, padT = 12, padB = 24;
+  const W0 = W - padL - padR, H0 = H - padT - padB;
+  const maxV = Math.max(...points.map(p => p.total), 1);
+  const xStep = points.length > 1 ? W0 / (points.length - 1) : 0;
+  const yFor = v => padT + H0 - (v / maxV) * H0;
+
+  // grid + y labels
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.fillStyle = '#888';
+  ctx.font = '10px -apple-system';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (H0 * i / 4);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + W0, y);
+    ctx.stroke();
+    ctx.fillText('¥' + Math.round(maxV * (1 - i / 4)), padL - 4, y + 3);
+  }
+
+  // line
+  ctx.strokeStyle = '#3c5066';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = padL + i * xStep, y = yFor(p.total);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // points (>0)
+  ctx.fillStyle = '#3c5066';
+  points.forEach((p, i) => {
+    if (p.total <= 0) return;
+    const x = padL + i * xStep, y = yFor(p.total);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // x labels
+  ctx.fillStyle = '#666';
+  ctx.textAlign = 'center';
+  const labelCount = Math.min(6, points.length);
+  for (let i = 0; i < labelCount; i++) {
+    const idx = Math.round((points.length - 1) * (i / Math.max(1, labelCount - 1)));
+    const x = padL + idx * xStep;
+    ctx.fillText(labelFmt(points[idx].date), x, padT + H0 + 12);
+  }
 }
 
 function renderStatCard(label, value, klass) {

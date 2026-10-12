@@ -474,7 +474,38 @@ function el(tag, attrs = {}, ...children) {
   return e;
 }
 
-window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el };
+/**
+ * 把对象数组导出为 CSV（含 BOM，Excel 直接打开不乱码）。
+ * columns: [{ key: 'name', label: '姓名' }, ...]
+ */
+function exportCSV(records, columns, filename) {
+  if (!records.length) {
+    showToast('没有数据可导出');
+    return;
+  }
+  const esc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const header = columns.map(c => esc(c.label)).join(',');
+  const rows = records.map(r => columns.map(c => esc(c.format ? c.format(r[c.key]) : r[c.key])).join(','));
+  // ﻿ BOM 让 Excel 识别 UTF-8
+  const csv = '﻿' + header + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('已导出 ' + records.length + ' 条');
+}
+
+window.Util = { fmtMoney, fmtDate, fmtMonthDay, fmtYM, catIcon, startOfDay, startOfWeek, startOfMonth, startOfYear, isoNow, showToast, el, exportCSV };
 
 
 // === js/views/input.js ===
@@ -967,132 +998,85 @@ function monthPoints(bucket) {
 }
 
 function drawChart(canvas, points, labelFmt, isYear) {
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
-  ctx.scale(dpr, dpr);
-
-  const padL = 44, padR = 16, padT = 16, padB = 28;
-  const W0 = W - padL - padR, H0 = H - padT - padB;
-
-  ctx.clearRect(0, 0, W, H);
-
   if (!points.length) return;
-
-  const maxV = Math.max(...points.map(p => p.total), 1);
-  const xStep = points.length > 1 ? W0 / (points.length - 1) : 0;
-  const yFor = v => padT + H0 - (v / maxV) * H0;
-
-  // grid
-  ctx.strokeStyle = '#eee';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padT + (H0 * i / 4);
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(padL + W0, y);
-    ctx.stroke();
-    ctx.fillStyle = '#999';
-    ctx.font = '10px -apple-system';
-    ctx.textAlign = 'right';
-    ctx.fillText(String(Math.round(maxV * (1 - i / 4))), padL - 6, y + 3);
+  if (!window.Chart) {
+    // CDN 加载失败，回退到原始 Canvas 实现
+    showToast('Chart.js 加载失败');
+    return;
   }
 
-  // line
-  ctx.strokeStyle = '#3c5066';
-  ctx.lineWidth = 2.5;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = padL + i * xStep;
-    const y = yFor(p.total);
-    if (i === 0) ctx.moveTo(x, y);
-    else {
-      const px = padL + (i - 1) * xStep;
-      const py = yFor(points[i - 1].total);
-      const mx = (px + x) / 2;
-      ctx.bezierCurveTo(mx, py, mx, y, x, y);
+  const data = points.map(p => ({
+    x: p.date.getTime(),
+    y: p.total
+  }));
+
+  // 销毁旧实例（避免内存泄漏 + 多次切换 bucket 后累积）
+  if (canvas._chartInstance) {
+    canvas._chartInstance.destroy();
+    canvas._chartInstance = null;
+  }
+
+  canvas._chartInstance = new window.Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: '消费金额',
+        data: data,
+        borderColor: '#3c5066',
+        backgroundColor: 'rgba(60, 80, 102, 0.08)',
+        borderWidth: 2.5,
+        tension: 0.3,
+        pointRadius: ctx => ctx.raw && ctx.raw.y > 0 ? 4 : 0,
+        pointHoverRadius: 6,
+        pointBackgroundColor: '#3c5066',
+        pointBorderColor: '#fff',
+        pointBorderWidth: 1.5,
+        fill: true,
+        spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      animation: { duration: 350 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(0,0,0,0.85)',
+          titleFont: { size: 12 },
+          bodyFont: { size: 13, weight: '600' },
+          padding: 8,
+          displayColors: false,
+          callbacks: {
+            title: (items) => labelFmt(new Date(items[0].parsed.x)),
+            label: (item) => '¥' + fmtMoney(item.parsed.y)
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: isYear ? 'month' : 'day',
+            tooltipFormat: isYear ? 'yyyy年MM月' : 'MM月dd日',
+            displayFormats: { day: 'MM-dd', month: 'yy-MM' }
+          },
+          grid: { display: false },
+          ticks: { color: '#666', font: { size: 11 }, maxRotation: 0, autoSkipPadding: 18 }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(0,0,0,0.06)' },
+          ticks: {
+            color: '#666',
+            font: { size: 11 },
+            callback: (v) => '¥' + v
+          }
+        }
+      }
     }
   });
-  ctx.stroke();
-
-  // points (only > 0)
-  ctx.fillStyle = '#3c5066';
-  points.forEach((p, i) => {
-    if (p.total <= 0) return;
-    const x = padL + i * xStep;
-    const y = yFor(p.total);
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // x labels (sample 6 evenly)
-  ctx.fillStyle = '#666';
-  ctx.font = '10px -apple-system';
-  ctx.textAlign = 'center';
-  const labelCount = Math.min(6, points.length);
-  for (let i = 0; i < labelCount; i++) {
-    const idx = Math.round((points.length - 1) * (i / Math.max(1, labelCount - 1)));
-    const p = points[idx];
-    const x = padL + idx * xStep;
-    ctx.fillText(labelFmt(p.date), x, padT + H0 + 14);
-  }
-
-  // hover / drag
-  canvas.onmousemove = canvas.ontouchmove = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-    if (cx < padL || cx > padL + W0) return;
-    const ratio = (cx - padL) / W0;
-    const idx = Math.round(ratio * (points.length - 1));
-    const nearest = points
-      .map((p, i) => ({ p, i }))
-      .filter(({ p }) => p.total > 0)
-      .sort((a, b) => Math.abs(a.i - idx) - Math.abs(b.i - idx))[0];
-    if (!nearest) return;
-    showTooltip(canvas, nearest.p, labelFmt, isYear);
-  };
-  canvas.onmouseleave = canvas.ontouchend = () => {
-    hideTooltip();
-  };
-}
-
-let _tooltip = null;
-function ensureTooltip() {
-  if (!_tooltip) {
-    _tooltip = el('div', { class: 'chart-tooltip', style: 'display:none' });
-    document.body.appendChild(_tooltip);
-  }
-  return _tooltip;
-}
-function showTooltip(canvas, point, labelFmt, isYear) {
-  const tip = ensureTooltip();
-  const dateStr = isYear
-    ? `${point.date.getFullYear()}年${point.date.getMonth() + 1}月`
-    : `${point.date.getMonth() + 1}月${point.date.getDate()}日`;
-  tip.innerHTML = `<div style="color:#666;">${dateStr}</div><div style="font-weight:600;">¥${fmtMoney(point.total)}</div>`;
-  const rect = canvas.getBoundingClientRect();
-  const padL = 44;
-  const W0 = rect.width - padL - 16;
-  const xStep = W0 / Math.max(1, bucketize().find(b => b.key === selectedBucketKey)?.items.length || 1);
-  const ratio = (point.date - new Date(bucketize()[0]?.key || Date.now())) / (1000 * 86400);
-  // simple approx positioning
-  tip.style.left = (rect.left + padL + (xStep * indexOf(bucketize().find(b => b.key === selectedBucketKey)?.items, point))) + 'px';
-  tip.style.top = (rect.top + 14) + 'px';
-  tip.style.display = 'block';
-}
-
-function indexOf(arr, item) {
-  if (!arr) return 0;
-  const day = item.date.toISOString().slice(0, 10);
-  return arr.findIndex(r => new Date(r.timestamp).toISOString().slice(0, 10) === day);
-}
-
-function hideTooltip() {
-  if (_tooltip) _tooltip.style.display = 'none';
 }
 
 function renderStatCard(label, value, klass) {
@@ -1214,7 +1198,7 @@ window.renderStats = renderStats;
 // === js/views/records.js ===
 (function() {
 const DB = window.DB;
-const { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToast } = window.Util;
+const { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToast, exportCSV } = window.Util;
 
 
 let allRecords = [];
@@ -1311,8 +1295,20 @@ async function renderRecords() {
   const recs = filtered();
   const total = recs.reduce((s, r) => s + Number(r.amount), 0);
   wrap.appendChild(el('div', { class: 'summary-line' },
-    el('span', {}, `共 ${recs.length} 笔`),
-    el('span', {}, `合计 ¥${fmtMoney(total)}`)
+    el('span', {}, `共 ${recs.length} 笔 · 合计 ¥${fmtMoney(total)}`),
+    el('button', {
+      class: 'export-btn',
+      onclick: () => {
+        const stamp = new Date().toISOString().slice(0, 10);
+        exportCSV(recs, [
+          { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+          { key: 'category', label: '类别' },
+          { key: 'description', label: '描述' },
+          { key: 'amount', label: '金额(元)' },
+          { key: 'rawInput', label: '原始输入' }
+        ], 'ledgerly_' + stamp + '.csv');
+      }
+    }, '📥 导出 CSV')
   ));
 
   if (!recs.length) {

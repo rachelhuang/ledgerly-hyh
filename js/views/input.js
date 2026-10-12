@@ -1,7 +1,7 @@
 import * as DB from '../db.js';
 import { Settings } from '../settings.js';
 import { extractExpenseFromText, extractExpenseFromImage } from '../llm.js';
-import { isSupported as speechSupported, listen as speechListen, stop as speechStop } from '../speech.js';
+import { isSupported as speechSupported, createRecognizer } from '../speech.js';
 import { el, fmtDate, fmtMoney, showToast } from '../util.js';
 
 const EXAMPLES = [
@@ -58,44 +58,119 @@ async function saveExtracted(extracted, raw) {
 }
 
 async function submitText(text) {
-  const cfg = Settings.config;
   if (!Settings.isConfigured) throw new Error('请先在「设置」中填写 Base URL / API Key / Model');
-  const extracted = await extractExpenseFromText(text);
+  const extracted = await LLM.extractExpenseFromText(text);
   return await saveExtracted(extracted, text);
 }
 
 async function submitImage(file) {
-  const cfg = Settings.config;
   if (!Settings.isConfigured) throw new Error('请先在「设置」中填写 Base URL / API Key / Model');
   const base64 = await fileToBase64(file);
-  const extracted = await extractExpenseFromImage(base64);
+  const extracted = await LLM.extractExpenseFromImage(base64);
   return await saveExtracted(extracted, '[图片]');
 }
 
-async function handleVoice() {
+// 删除一条记录（首页"已记录"卡片用）
+async function deleteRecord(r) {
+  await DB.remove(r.id);
+  if (lastSaved && lastSaved.id === r.id) {
+    lastSaved = null;
+  }
+}
+
+// ========== 语音 sheet（重写版） ==========
+function showVoiceSheet({ onSubmit, onCancel }) {
   if (!speechSupported()) {
     showToast('当前浏览器不支持语音识别');
     return;
   }
-  showVoiceSheet({
-    onCancel: () => speechStop(),
-    onConfirm: async () => {
-      try {
-        showToast('正在识别语音…', 5000);
-        const text = await speechListen();
-        if (text) {
-          // Fill into textbox and let user submit
-          showToast('已识别：' + text + '（请在文本框确认后点保存）', 4000);
-          const ta = document.getElementById('text-input');
-          if (ta) ta.value = text;
-        }
-      } catch (e) {
-        showToast(e.message || '识别失败');
-      }
+
+  const overlay = el('div', { class: 'sheet-overlay' });
+  const sheet = el('div', { class: 'sheet' });
+  const title = el('h3', {}, '语音记账');
+
+  const circle = el('div', { class: 'voice-circle' }, '🎙');
+  const time = el('div', { class: 'voice-time' }, '00:00');
+  const transcriptBox = el('div', {
+    class: 'voice-transcript',
+    style: 'min-height:48px; max-height:120px; overflow:auto; padding:10px; border-radius:8px; background:#f5f5f7; font-size:14px; margin:8px 0 16px; color:#333; white-space:pre-wrap;'
+  }, '点击麦克风开始说话');
+  const hint = el('div', { class: 'muted', style: 'font-size:11px; margin-bottom:8px;' }, '提示：可中途点 ✓ 完成，会自动把文字填到文本框');
+
+  const btnRow = el('div', { class: 'voice-buttons' });
+  const cancelBtn = el('button', { class: 'voice-btn cancel' }, '✕');
+  const toggleBtn = el('button', { class: 'voice-btn', id: 'voice-toggle' }, '🎙');
+  const confirmBtn = el('button', { class: 'voice-btn', id: 'voice-confirm' }, '✓');
+  btnRow.append(cancelBtn, toggleBtn, confirmBtn);
+
+  sheet.append(title, circle, hint, transcriptBox, time, btnRow);
+  overlay.append(sheet);
+  document.body.append(overlay);
+
+  let startedAt = 0;
+  let timer = null;
+  let lastTranscript = '';
+  const ctl = createRecognizer({
+    onInterim: (text) => {
+      lastTranscript = text;
+      transcriptBox.textContent = text || '点击麦克风开始说话';
+    },
+    onError: (e) => {
+      showToast('语音识别错误：' + (e.error || e.message || 'unknown'));
+    },
+    onEnd: ({ final }) => {
+      // 只要拿到 final 就视为成功，可点 ✓ 提交
+      if (final) lastTranscript = final;
+      transcriptBox.textContent = lastTranscript || '（未识别到）';
     }
   });
+
+  function tick() {
+    const sec = Math.floor((Date.now() - startedAt) / 1000);
+    time.textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+  }
+
+  function start() {
+    if (ctl.isRunning()) return;
+    ctl.start();
+    startedAt = Date.now();
+    circle.classList.add('recording');
+    transcriptBox.textContent = '正在听...';
+    timer = setInterval(tick, 200);
+  }
+
+  function stop() {
+    if (!ctl.isRunning()) return;
+    ctl.stop();
+    circle.classList.remove('recording');
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  function cleanup() {
+    if (ctl.isRunning()) ctl.cancel();
+    if (timer) clearInterval(timer);
+    overlay.remove();
+  }
+
+  toggleBtn.onclick = () => {
+    if (ctl.isRunning()) stop();
+    else start();
+  };
+
+  confirmBtn.onclick = () => {
+    // 拿到当前累积文本，关闭弹窗，提交到文本框
+    stop();
+    cleanup();
+    onSubmit(lastTranscript || '');
+  };
+
+  cancelBtn.onclick = () => {
+    cleanup();
+    onCancel();
+  };
 }
 
+// ========== 图片选择处理 ==========
 async function handleImageFile(file) {
   if (!file) return;
   if (!/^image\//.test(file.type)) {
@@ -127,79 +202,14 @@ function setBusy(v) {
   }
 }
 
-function showVoiceSheet({ onCancel, onConfirm }) {
-  const overlay = el('div', { class: 'sheet-overlay' });
-  const sheet = el('div', { class: 'sheet' });
-  const title = el('h3', {}, '按住 ✓ 开始 / 结束');
-  const circle = el('div', { class: 'voice-circle' }, '🎙');
-  const time = el('div', { class: 'voice-time' }, '00:00');
-  const hint = el('div', { class: 'muted', style: 'margin-bottom:12px;' }, '点击 ✓ 录音，再次点击 ✓ 结束识别');
-  const btnRow = el('div', { class: 'voice-buttons' });
-  const cancelBtn = el('button', { class: 'voice-btn cancel' }, '✕');
-  const confirmBtn = el('button', { class: 'voice-btn' }, '✓');
-  btnRow.append(cancelBtn, confirmBtn);
-  sheet.append(title, circle, hint, time, btnRow);
-  overlay.append(sheet);
-  document.body.append(overlay);
-
-  let recording = false;
-  let timer = null;
-  let startedAt = 0;
-  let lastText = '';
-
-  const tick = () => {
-    const sec = Math.floor((Date.now() - startedAt) / 1000);
-    time.textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
-  };
-
-  const startRec = async () => {
-    if (recording) return;
-    try {
-      await speechListen({
-        onInterim: (t) => { lastText = t; }
-      });
-      // If we get here it means final was returned
-    } catch (e) {
-      // ignored; we use last interim text
-    }
-  };
-
-  cancelBtn.onclick = async () => {
-    if (timer) { clearInterval(timer); timer = null; }
-    speechStop();
-    onCancel && onCancel();
-    overlay.remove();
-  };
-
-  confirmBtn.onclick = async () => {
-    if (!recording) {
-      // start
-      recording = true;
-      startedAt = Date.now();
-      circle.classList.add('recording');
-      timer = setInterval(tick, 200);
-      // async listen; resolve with text via onConfirm
-      onConfirm && onConfirm();
-      // we don't await; let onConfirm trigger the recognition
-    } else {
-      // stop
-      recording = false;
-      circle.classList.remove('recording');
-      if (timer) { clearInterval(timer); timer = null; }
-      speechStop();
-      // close immediately; recognition result toast will appear via onConfirm
-      overlay.remove();
-    }
-  };
-}
-
+// ========== 渲染入口 ==========
 export function renderInput() {
   const root = document.getElementById('view');
   root.innerHTML = '';
 
   const wrap = el('div', { style: 'padding: 16px;' });
 
-  // Saved card
+  // 已记录卡片（含删除按钮）
   if (lastSaved) {
     wrap.appendChild(el('div', { class: 'saved-card' },
       el('div', { class: 'icon' }, '✅'),
@@ -210,64 +220,88 @@ export function renderInput() {
       ),
       el('button', {
         class: 'delete-btn',
+        title: '删除这条记录',
         onclick: async () => {
-          await DB.remove(lastSaved.id);
-          lastSaved = null;
-          renderInput();
+          if (!confirm('确定删除这条记录？')) return;
+          try {
+            await deleteRecord(lastSaved);
+            showToast('已删除');
+            renderInput();
+          } catch (e) {
+            showToast('删除失败：' + e.message);
+          }
         }
       }, '🗑')
     ));
   }
 
-  // Input section
+  // 输入区
   wrap.appendChild(el('h2', {}, '自然语言输入'));
   wrap.appendChild(el('div', { class: 'muted', style: 'margin-bottom: 6px;' }, '直接说一句话，或用下方「语音 / 相机 / 相册」按钮提交凭证'));
   const ta = el('textarea', { id: 'text-input', class: 'text-area', placeholder: '在这里输入...' });
   wrap.appendChild(ta);
 
-  // Examples
+  // 示例
   const expWrap = el('div', { style: 'margin-top: 12px;' });
   expWrap.appendChild(el('div', { class: 'muted', style: 'margin-bottom: 4px;' }, '试试这些'));
   const expRow = el('div', { class: 'examples' });
   for (const e of EXAMPLES) {
-    const chip = el('button', { class: 'chip', onclick: () => { ta.value = e; ta.focus(); } }, e);
-    expRow.appendChild(chip);
+    expRow.appendChild(el('button', {
+      class: 'chip',
+      onclick: () => { ta.value = e; ta.focus(); }
+    }, e));
   }
   expWrap.appendChild(expRow);
   wrap.appendChild(expWrap);
 
-  // Quick actions
+  // 快捷按钮
   wrap.appendChild(el('h2', { style: 'margin-top: 16px;' }, '快速记录'));
   const actionsRow = el('div', { class: 'actions-row' });
-  const voiceBtn = el('button', { class: 'btn-action pink', onclick: handleVoice },
-    el('div', { class: 'ico' }, '🎙'),
-    el('div', {}, '语音')
-  );
   const cameraInput = el('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none' });
-  const cameraBtn = el('button', { class: 'btn-action blue', onclick: () => cameraInput.click() },
-    el('div', { class: 'ico' }, '📷'),
-    el('div', {}, '相机')
-  );
   const galleryInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
-  const galleryBtn = el('button', { class: 'btn-action green', onclick: () => galleryInput.click() },
-    el('div', { class: 'ico' }, '🖼'),
-    el('div', {}, '相册')
-  );
   cameraInput.onchange = () => { if (cameraInput.files[0]) handleImageFile(cameraInput.files[0]); };
   galleryInput.onchange = () => { if (galleryInput.files[0]) handleImageFile(galleryInput.files[0]); };
-  actionsRow.append(voiceBtn, cameraBtn, galleryBtn);
+
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action pink',
+    onclick: () => showVoiceSheet({
+      onSubmit: (text) => {
+        if (text) {
+          ta.value = text;
+          showToast('已识别：' + text);
+        } else {
+          showToast('未识别到语音');
+        }
+      },
+      onCancel: () => {}
+    })
+  }, el('div', { class: 'ico' }, '🎙'), el('div', {}, '语音')));
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action blue',
+    onclick: () => cameraInput.click()
+  }, el('div', { class: 'ico' }, '📷'), el('div', {}, '相机')));
+  actionsRow.appendChild(el('button', {
+    class: 'btn-action green',
+    onclick: () => galleryInput.click()
+  }, el('div', { class: 'ico' }, '🖼'), el('div', {}, '相册')));
   wrap.appendChild(actionsRow);
   wrap.appendChild(cameraInput);
   wrap.appendChild(galleryInput);
 
-  // Error
+  // 错误提示
   if (lastError) {
     wrap.appendChild(el('div', { class: 'error', style: 'margin-top: 10px;' }, lastError));
   }
 
-  // Submit
-  const submitBtn = el('button', { id: 'submit-btn', class: 'btn-primary', onclick: onSubmitText }, '保存记录');
+  // 保存按钮
+  const submitBtn = el('button', {
+    id: 'submit-btn',
+    class: 'btn-primary',
+    onclick: onSubmitText
+  }, '保存记录');
   wrap.appendChild(submitBtn);
+
+  root.appendChild(wrap);
 
   async function onSubmitText() {
     const text = (ta.value || '').trim();
@@ -286,6 +320,4 @@ export function renderInput() {
       setBusy(false);
     }
   }
-
-  root.appendChild(wrap);
 }

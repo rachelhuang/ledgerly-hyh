@@ -1823,6 +1823,10 @@ function setActiveTab(name) {
     pre.textContent = '渲染 ' + name + ' 出错：\n' + (err && err.stack ? err.stack : String(err));
     view.appendChild(pre);
   }
+  // 滚动到顶部，方便看新内容（设置页内容长，避免用户找不到底部）
+  const scrollParent = document.querySelector('main#view .scroll') || document.getElementById('view');
+  if (scrollParent) scrollParent.scrollTop = 0;
+  window.scrollTo(0, 0);
 }
 
 function setupTabs() {

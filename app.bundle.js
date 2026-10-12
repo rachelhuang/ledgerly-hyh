@@ -1509,36 +1509,36 @@ const DB = window.DB;
 
 
 
-let testing = false;
-let lastResult = null;
-let formValues = {
-  baseURL: Settings.baseURL,
-  apiKey: Settings.apiKey,
-  model: Settings.model
-};
-
-function checkConfigured() {
-  return !!formValues.baseURL.trim() && !!formValues.apiKey.trim() && !!formValues.model.trim();
-}
-
-function renderSettings() {
+async function renderSettings() {
   const root = document.getElementById('view');
   root.innerHTML = '';
 
   const wrap = el('div', { style: 'padding-top: 8px;' });
 
-  // Status
-  const statusOk = checkConfigured();
+  // 状态
+  let testing = false;
+  let lastResult = null;
+  let formValues = {
+    baseURL: Settings.baseURL,
+    apiKey: Settings.apiKey,
+    model: Settings.model
+  };
+
+  function checkConfigured() {
+    return !!formValues.baseURL.trim() && !!formValues.apiKey.trim() && !!formValues.model.trim();
+  }
+
+  // 状态卡
   wrap.appendChild(el('div', { class: 'section' },
     el('div', { class: 'field' },
       el('div', { style: 'display:flex; align-items:center; gap:6px;' },
-        el('span', { style: `color:${statusOk ? '#2f9e44' : '#f08c00'}; font-size: 16px;` }, statusOk ? '✅' : '⚠'),
-        el('span', { style: 'font-weight: 500;' }, statusOk ? '已配置' : '未配置')
+        el('span', { style: 'color:#2f9e44; font-size: 16px;' }, '✅'),
+        el('span', { style: 'font-weight: 500;' }, '配置已就绪（下方可随时修改）')
       )
     )
   ));
 
-  // Config
+  // 配置
   const sec1 = el('div', { class: 'section' });
   sec1.appendChild(el('h3', {}, '大模型配置（OpenAI 兼容）'));
 
@@ -1546,7 +1546,7 @@ function renderSettings() {
   f1.appendChild(el('label', {}, 'Base URL'));
   const i1 = el('input', {
     type: 'url', value: formValues.baseURL, autocomplete: 'off',
-    oninput: (e) => { formValues.baseURL = e.target.value.trim(); updateStatus(); }
+    oninput: (e) => { formValues.baseURL = e.target.value.trim(); }
   });
   f1.appendChild(i1);
   sec1.appendChild(f1);
@@ -1555,7 +1555,7 @@ function renderSettings() {
   f2.appendChild(el('label', {}, 'API Key'));
   const i2 = el('input', {
     type: 'password', value: formValues.apiKey, autocomplete: 'off',
-    oninput: (e) => { formValues.apiKey = e.target.value.trim(); updateStatus(); }
+    oninput: (e) => { formValues.apiKey = e.target.value.trim(); }
   });
   f2.appendChild(i2);
   sec1.appendChild(f2);
@@ -1564,86 +1564,108 @@ function renderSettings() {
   f3.appendChild(el('label', {}, 'Model'));
   const i3 = el('input', {
     type: 'text', value: formValues.model, autocomplete: 'off',
-    oninput: (e) => { formValues.model = e.target.value.trim(); updateStatus(); }
+    oninput: (e) => { formValues.model = e.target.value.trim(); }
   });
   f3.appendChild(i3);
   sec1.appendChild(f3);
   wrap.appendChild(sec1);
 
-  // Test
+  // 测试连接
   const sec2 = el('div', { class: 'section' });
-  const testBtn = el('button', {
-    class: 'btn-primary',
-    onclick: runTest
-  }, testing ? '测试中...' : '测试连接');
+  const testBtn = el('button', { class: 'btn-primary', onclick: runTest }, '测试连接');
   sec2.appendChild(testBtn);
-  if (lastResult) {
-    sec2.appendChild(el('div', {
-      class: 'footer',
-      style: `color: ${lastResult.success ? '#2f9e44' : '#d6336c'}; margin-top: 8px;`
-    }, lastResult.msg));
-  }
-  sec2.appendChild(el('div', { class: 'footer' }, '测试会向 LLM 发起一次真实请求，验证 API Key 与模型名是否可用。'));
+  sec2.appendChild(el('div', { class: 'footer' },
+    '测试会向 LLM 发起一次真实请求，验证 API Key 与模型名是否可用。'
+  ));
   wrap.appendChild(sec2);
 
-  // Examples
-  const sec3 = el('div', { class: 'section' });
-  sec3.appendChild(el('h3', {}, '常用 Base URL 示例'));
-  const urls = [
+  // 示例
+  const sec4 = el('div', { class: 'section' });
+  sec4.appendChild(el('h3', {}, '常用 Base URL 示例'));
+  for (const u of [
     'OpenAI: https://api.openai.com/v1',
     'DeepSeek: https://api.deepseek.com/v1',
     'Moonshot: https://api.moonshot.cn/v1',
     '智谱 GLM: https://open.bigmodel.cn/api/paas/v4'
-  ];
-  for (const u of urls) {
-    sec3.appendChild(el('div', { class: 'footer' }, u));
-  }
-  wrap.appendChild(sec3);
-
-  // Voice note
-  const sec4 = el('div', { class: 'section' });
-  sec4.appendChild(el('h3', {}, '语音识别'));
-  sec4.appendChild(el('div', { class: 'footer', style: 'display:flex; gap:6px; align-items:center;' },
-    el('span', {}, '🎙'),
-    el('span', {}, '语音通过浏览器 Web Speech API 识别为文本，再交给 LLM 抽取。需要 HTTPS 或 localhost。')
-  ));
+  ]) sec4.appendChild(el('div', { class: 'footer' }, u));
   wrap.appendChild(sec4);
 
-  // About
+  // 关于
   const sec5 = el('div', { class: 'section' });
   sec5.appendChild(el('h3', {}, '关于'));
   sec5.appendChild(el('div', { class: 'field' },
     el('div', {}, 'Ledgerly PWA · v1.0'),
-    el('div', { class: 'footer', style: 'margin-top:4px;' }, '数据存储于浏览器 IndexedDB，可在 Safari/Chrome 安装到桌面')
+    el('div', { class: 'footer', style: 'margin-top:4px;' },
+      '数据存储于浏览器 IndexedDB，可在 Safari/Chrome 安装到桌面')
   ));
   wrap.appendChild(sec5);
 
-  // 数据安全（导出全部数据）
+  // 数据备份与恢复
   const sec6 = el('div', { class: 'section' });
   sec6.appendChild(el('h3', {}, '数据备份与恢复'));
   sec6.appendChild(el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap;' },
     el('button', {
       class: 'btn-primary',
-      style: 'flex: 1; min-width: 140px;',
+      style: 'flex:1; min-width:140px;',
       onclick: exportAllData
     }, '📤 导出 CSV'),
-    el('input', { type: 'file', accept: '.csv,text/csv', style: 'display:none', id: 'csv-import-input-settings' }),
+    el('input', {
+      type: 'file', accept: '.csv,text/csv',
+      style: 'display:none', id: 'csv-import-input-settings'
+    }),
     el('button', {
       class: 'btn-primary',
-      style: 'flex: 1; min-width: 140px; background: #2f9e44;',
-      onclick: () => document.getElementById('csv-import-input-settings').click()
+      style: 'flex:1; min-width:140px; background:#2f9e44;',
+      onclick: () => {
+        const inp = document.getElementById('csv-import-input-settings');
+        if (inp) inp.click();
+      }
     }, '📥 导入 CSV')
   ));
-  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 6px;' },
-    '💡 备份流程：导出 CSV → 保存到云端 → 删除旧 PWA → 装新 PWA → 设置页导入 CSV'
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top:6px;' },
+    '💡 备份流程：导出 CSV → 保存到云端 → 卸载 PWA → 装新 PWA → 设置页导入'
   ));
-  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 4px; color: #2f9e44;' },
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top:4px; color:#2f9e44;' },
     '✅ 导入时自动去重（同时间+描述+金额视为重复）'
   ));
-  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top: 8px; color: #f08c00;' },
+  sec6.appendChild(el('div', { class: 'footer', style: 'margin-top:8px; color:#f08c00;' },
     '⚠️ Safari「清除网站数据」/ 卸载 PWA 会清空 IndexedDB，请定期备份！'
   ));
   wrap.appendChild(sec6);
+
+  // 数据完整性（先 await，再渲染）
+  let dataStatus = { count: 0, latest: '无' };
+  try {
+    const all = await DB.getAll();
+    dataStatus.count = all.length;
+    if (all.length) {
+      const latest = all.reduce((m, r) => r.createdAt > m ? r.createdAt : m, all[0].createdAt);
+      dataStatus.latest = new Date(latest).toLocaleString('zh-CN');
+    }
+  } catch (e) {
+    dataStatus = { count: -1, latest: '读取失败：' + e.message };
+  }
+
+  const sec7 = el('div', { class: 'section' });
+  sec7.appendChild(el('h3', {}, '📊 数据完整性'));
+  sec7.appendChild(el('div', { class: 'field' },
+    el('div', { style: 'display:flex; justify-content:space-between; padding:4px 0;' },
+      el('span', { class: 'muted' }, '当前记录数'),
+      el('span', { style: 'font-weight:600; font-size:16px;' },
+        dataStatus.count >= 0 ? dataStatus.count + ' 条' : '读取失败')
+    ),
+    el('div', { style: 'display:flex; justify-content:space-between; padding:4px 0;' },
+      el('span', { class: 'muted' }, '最近写入'),
+      el('span', { style: 'font-size:13px;' }, dataStatus.latest)
+    )
+  ));
+  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top:8px;' },
+    '💡 升级 PWA 后回来对比这两个数字，应该保持不变。'
+  ));
+  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top:4px; color:#2f9e44;' },
+    '✅ PWA 应用更新不会清空数据（IndexedDB 与 SW 缓存独立）。'
+  ));
+  wrap.appendChild(sec7);
 
   root.appendChild(wrap);
 
@@ -1657,46 +1679,7 @@ function renderSettings() {
     };
   }
 
-  updateStatus();
-
-  function updateStatus() {
-    const ok = checkConfigured();
-    testBtn.disabled = !ok || testing;
-    testBtn.textContent = testing ? '测试中...' : '测试连接';
-  }
-
-  async function runTest() {
-    if (!checkConfigured() || testing) return;
-
-    // Persist to localStorage so other views can read
-    Settings.baseURL = formValues.baseURL;
-    Settings.apiKey = formValues.apiKey;
-    Settings.model = formValues.model;
-
-    testing = true;
-    lastResult = null;
-    updateStatus();
-    try {
-      const r = await testConnection();
-      lastResult = { success: true, msg: `✅ 连接成功：${r.category} ¥${r.amount} · ${r.description}` };
-    } catch (e) {
-      lastResult = { success: false, msg: '❌ ' + (e.message || String(e)) };
-    }
-    testing = false;
-    updateStatus();
-    if (lastResult) {
-      const footer = sec2.querySelector('.footer:last-of-type');
-      // re-render only the result line
-      let resultLine = sec2.querySelector('.test-result');
-      if (!resultLine) {
-        resultLine = el('div', { class: 'footer test-result' });
-        sec2.insertBefore(resultLine, footer);
-      }
-      resultLine.style.color = lastResult.success ? '#2f9e44' : '#d6336c';
-      resultLine.style.marginTop = '8px';
-      resultLine.textContent = lastResult.msg;
-    }
-  }
+  // ============ 内部函数 ============
 
   async function exportAllData() {
     try {
@@ -1718,11 +1701,7 @@ function renderSettings() {
     try {
       const text = await file.text();
       const { headers, rows } = parseCSV(text);
-      if (!rows.length) {
-        showToast('CSV 没有数据');
-        return;
-      }
-      // 列名映射（兼容导出格式 + 常见变体）
+      if (!rows.length) { showToast('CSV 没有数据'); return; }
       const colMap = {};
       headers.forEach(h => {
         const lh = h.trim().toLowerCase();
@@ -1732,10 +1711,7 @@ function renderSettings() {
         if (lh.includes('金额') || lh === 'amount') colMap.amount = h;
         if (lh.includes('原始') || lh === 'rawinput' || lh === 'raw') colMap.rawInput = h;
       });
-      if (!colMap.amount) {
-        showToast('找不到金额列（"金额"或 "amount"）');
-        return;
-      }
+      if (!colMap.amount) { showToast('找不到金额列'); return; }
       const existing = await DB.getAll();
       const existingKeys = new Set(existing.map(r =>
         (r.timestamp || '') + '|' + (r.description || '') + '|' + String(r.amount)
@@ -1752,10 +1728,9 @@ function renderSettings() {
           tsIso = new Date().toISOString();
         }
         const desc = (row[colMap.description] || row[colMap.category] || '导入').trim();
-        // 去重：同 timestamp + description + amount 视为同一条
         const key = tsIso + '|' + desc + '|' + String(amount);
         if (existingKeys.has(key)) { skipped++; continue; }
-        const record = {
+        await DB.add({
           id: crypto.randomUUID(),
           timestamp: tsIso,
           category: (row[colMap.category] || '其他').trim() || '其他',
@@ -1763,53 +1738,45 @@ function renderSettings() {
           description: desc,
           rawInput: (row[colMap.rawInput] || '[CSV导入]').trim(),
           createdAt: new Date().toISOString()
-        };
-        await DB.add(record);
+        });
         existingKeys.add(key);
         added++;
       }
-      showToast(`导入完成：${added} 条新增，${skipped} 条跳过（重复/无效）`);
-      renderSettings();
+      showToast('导入完成：' + added + ' 条新增，' + skipped + ' 条跳过');
     } catch (e) {
       showToast('导入失败：' + e.message);
     }
   }
 
-  // 加载数据完整性信息
-  let dataStatus = { count: 0, latest: '无' };
-  try {
-    const all = await DB.getAll();
-    dataStatus.count = all.length;
-    if (all.length) {
-      const latest = all.reduce((m, r) => r.createdAt > m ? r.createdAt : m, all[0].createdAt);
-      dataStatus.latest = new Date(latest).toLocaleString('zh-CN');
+  async function runTest() {
+    if (!checkConfigured() || testing) return;
+    Settings.baseURL = formValues.baseURL;
+    Settings.apiKey = formValues.apiKey;
+    Settings.model = formValues.model;
+    testing = true;
+    lastResult = null;
+    testBtn.disabled = true;
+    testBtn.textContent = '测试中...';
+    try {
+      const r = await testConnection();
+      lastResult = { success: true, msg: '✅ 连接成功：' + r.category + ' ¥' + r.amount + ' · ' + r.description };
+    } catch (e) {
+      lastResult = { success: false, msg: '❌ ' + (e.message || String(e)) };
     }
-  } catch (e) {
-    dataStatus = { count: -1, latest: '读取失败：' + e.message };
+    testing = false;
+    testBtn.disabled = false;
+    testBtn.textContent = '测试连接';
+    if (lastResult) {
+      let line = sec2.querySelector('.test-result');
+      if (!line) {
+        line = el('div', { class: 'footer test-result', style: 'margin-top:8px;' });
+        sec2.appendChild(line);
+      }
+      line.style.color = lastResult.success ? '#2f9e44' : '#d6336c';
+      line.textContent = lastResult.msg;
+    }
   }
-
-  // 数据完整性
-  const sec7 = el('div', { class: 'section' });
-  sec7.appendChild(el('h3', {}, '📊 数据完整性'));
-  sec7.appendChild(el('div', { class: 'field' },
-    el('div', { style: 'display:flex; justify-content:space-between; padding: 4px 0;' },
-      el('span', { class: 'muted' }, '当前记录数'),
-      el('span', { style: 'font-weight:600; font-size:16px;' }, dataStatus.count >= 0 ? dataStatus.count + ' 条' : '读取失败')
-    ),
-    el('div', { style: 'display:flex; justify-content:space-between; padding: 4px 0;' },
-      el('span', { class: 'muted' }, '最近写入'),
-      el('span', { style: 'font-size:13px;' }, dataStatus.latest)
-    )
-  ));
-  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top: 8px;' },
-    '💡 升级 PWA 后回来对比这两个数字，应该保持不变。'
-  ));
-  sec7.appendChild(el('div', { class: 'footer', style: 'margin-top: 4px; color: #2f9e44;' },
-    '✅ PWA 应用更新不会清空数据（IndexedDB 与 SW 缓存独立）。'
-  ));
-  wrap.appendChild(sec7);
 }
-
 window.renderSettings = renderSettings;
 
 })();

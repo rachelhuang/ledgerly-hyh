@@ -112,19 +112,24 @@ function makeGroupHeader({ key, label, summary, onToggle, kind }) {
     toggle(key);
     if (onToggle) onToggle();
   };
+  const isCollapsible = kind !== 'day';  // 按天组不折叠
   const header = el('div', { class: 'day-section collapsible' });
   const left = el('span', { style: 'display:flex; align-items:center; gap:6px; flex:1;' },
-    el('span', {
-      class: 'caret',
-      style: 'font-size:10px; transition: transform 0.15s; display:inline-block; width:10px;',
-      onclick: (e) => { e.stopPropagation(); handleToggle(); }
-    }, collapsed ? '▶' : '▼'),
+    isCollapsible
+      ? el('span', {
+          class: 'caret',
+          style: 'font-size:10px; transition: transform 0.15s; display:inline-block; width:10px;',
+          onclick: (e) => { e.stopPropagation(); handleToggle(); }
+        }, collapsed ? '▶' : '▼')
+      : el('span', { style: 'display:inline-block; width:10px;' }),  // 占位
     el('span', {}, label)
   );
   header.appendChild(left);
   header.appendChild(el('span', {}, summary));
-  header.style.cursor = 'pointer';
-  header.onclick = handleToggle;
+  if (isCollapsible) {
+    header.style.cursor = 'pointer';
+    header.onclick = handleToggle;
+  }
   return header;
 }
 

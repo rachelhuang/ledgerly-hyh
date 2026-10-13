@@ -392,6 +392,27 @@ h2 { font-size: 16px; margin: 0 0 10px; font-weight: 600; }
   background: var(--card);
   border-bottom: 1px solid var(--border);
 }
+.group-tabs {
+  display: flex;
+  gap: 0;
+  background: rgba(0,0,0,0.06);
+  border-radius: 999px;
+  padding: 2px;
+}
+.group-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--subtext);
+}
+.group-tabs button.active {
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
 .export-btn {
   background: var(--accent);
   color: white;

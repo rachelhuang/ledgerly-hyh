@@ -51,6 +51,14 @@ main#view {
   overflow: hidden;
   position: relative;
 }
+/* main#view 内部的容器：撑满并允许滚动 */
+main#view > div {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+}
 .scroll {
   height: 100%;
   overflow-y: auto;

@@ -13,22 +13,22 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; padding: 0; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; -webkit-overflow-scrolling: touch; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
   font-size: 15px;
   color: var(--text);
   background: var(--bg);
   min-height: 100%;
-  height: auto;
+  height: 100%;
 }
 
 #app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
-  height: auto;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
 }
 
 #topbar {
@@ -47,6 +47,7 @@ body {
 
 main#view {
   flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }

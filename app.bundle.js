@@ -1542,7 +1542,9 @@ function isCurrentPeriodKey(key) {
 }
 
 // 折叠状态管理：当月展开，其他月折叠
-function isCollapsed(key) {
+// kind: 'month' | 'day' — day 强制展开（不参与折叠逻辑）
+function isCollapsed(key, kind) {
+  if (kind === 'day') return false;  // 按天组始终展开
   if (collapsedMap.has(key)) return true;  // 用户手动折叠的，记忆
   if (collapsedMap.has('__expanded:' + key)) return false;  // 用户手动展开的，记忆
   // 首次访问：非当月默认折叠
@@ -1567,8 +1569,8 @@ function toggle(key) {
   }
 }
 
-function makeGroupHeader({ key, label, summary, onToggle }) {
-  const collapsed = isCollapsed(key);
+function makeGroupHeader({ key, label, summary, onToggle, kind }) {
+  const collapsed = isCollapsed(key, kind);
   const handleToggle = () => {
     toggle(key);
     if (onToggle) onToggle();
@@ -1704,7 +1706,7 @@ async function renderRecords() {
       container.appendChild(monthHeader);
 
       // 如果月没折叠，才显示月内的日
-      if (!isCollapsed(monthKey)) {
+      if (!isCollapsed(monthKey, "month")) {
         const days = groupByDay(items);
         for (const [day, dayItems] of days) {
           const dayTotal = dayItems.reduce((s, r) => s + Number(r.amount), 0);
@@ -1717,7 +1719,7 @@ async function renderRecords() {
           });
           container.appendChild(dayHeader);
           // 日也支持折叠（虽然默认展开）
-          if (!isCollapsed(dayKey)) {
+          if (!isCollapsed(dayKey, "day")) {
             for (const r of dayItems) container.appendChild(renderRow(r));
           }
         }
@@ -1805,7 +1807,7 @@ function renderListOnly(container) {
     container.appendChild(monthHeader);
 
     // 月没折叠才显示月内
-    if (!isCollapsed(monthKey)) {
+    if (!isCollapsed(monthKey, "month")) {
       const days = groupByDay(items);
       for (const [day, dayItems] of days) {
         const dayTotal = dayItems.reduce((s, r) => s + Number(r.amount), 0);
@@ -1818,7 +1820,7 @@ function renderListOnly(container) {
         });
         container.appendChild(dayHeader);
         // 日也支持折叠（虽然默认展开）
-        if (!isCollapsed(dayKey)) {
+        if (!isCollapsed(dayKey, "day")) {
           for (const r of dayItems) container.appendChild(renderRow(r));
         }
       }

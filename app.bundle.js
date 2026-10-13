@@ -1528,31 +1528,26 @@ function formatMonthHeader(ym) {
 // 可折叠分组标题。collapsedMap 记录哪些 key 是折叠的（key 形如 'day:2026-09-26' 或 'month:2026-09'）
 const collapsedMap = new Set();
 
-function makeGroupHeader({ key, label, summary, color = 'var(--accent)' }) {
+function makeGroupHeader({ key, label, summary, onToggle }) {
   const isCollapsed = collapsedMap.has(key);
+  const toggle = () => {
+    if (collapsedMap.has(key)) collapsedMap.delete(key);
+    else collapsedMap.add(key);
+    if (onToggle) onToggle();
+  };
   const header = el('div', { class: 'day-section collapsible' });
   const left = el('span', { style: 'display:flex; align-items:center; gap:6px; flex:1;' },
     el('span', {
       class: 'caret',
       style: 'font-size:10px; transition: transform 0.15s; display:inline-block; width:10px;',
-      onclick: () => {
-        if (collapsedMap.has(key)) collapsedMap.delete(key);
-        else collapsedMap.add(key);
-        rerenderListOnly();
-      }
+      onclick: (e) => { e.stopPropagation(); toggle(); }
     }, isCollapsed ? '▶' : '▼'),
     el('span', {}, label)
   );
   header.appendChild(left);
   header.appendChild(el('span', {}, summary));
   header.style.cursor = 'pointer';
-  // 整行可点击
-  header.onclick = (e) => {
-    if (e.target.className === 'caret') return;  // 让 caret 自己的 onclcik 处理
-    if (collapsedMap.has(key)) collapsedMap.delete(key);
-    else collapsedMap.add(key);
-    rerenderListOnly();
-  };
+  header.onclick = toggle;
   return header;
 }
 
@@ -1676,7 +1671,8 @@ async function renderRecords() {
         const header = makeGroupHeader({
           key,
           label: formatDayHeader(day) + ' · ' + items.length + ' 笔',
-          summary: '合计 ¥' + fmtMoney(dayTotal)
+          summary: '合计 ¥' + fmtMoney(dayTotal),
+          onToggle: rerenderListOnly
         });
         container.appendChild(header);
         if (!collapsedMap.has(key)) {
@@ -1692,7 +1688,8 @@ async function renderRecords() {
         const header = makeGroupHeader({
           key,
           label: formatMonthHeader(ym) + ' · ' + items.length + ' 笔',
-          summary: '合计 ¥' + fmtMoney(monthTotal)
+          summary: '合计 ¥' + fmtMoney(monthTotal),
+          onToggle: rerenderListOnly
         });
         container.appendChild(header);
         if (!collapsedMap.has(key)) {
@@ -1787,7 +1784,8 @@ function renderListOnly(container) {
       const header = makeGroupHeader({
         key,
         label: formatDayHeader(day) + ' · ' + items.length + ' 笔',
-        summary: '合计 ¥' + fmtMoney(dayTotal)
+        summary: '合计 ¥' + fmtMoney(dayTotal),
+        onToggle: () => renderListOnly(container)
       });
       container.appendChild(header);
       if (!collapsedMap.has(key)) {
@@ -1802,7 +1800,8 @@ function renderListOnly(container) {
       const header = makeGroupHeader({
         key,
         label: formatMonthHeader(ym) + ' · ' + items.length + ' 笔',
-        summary: '合计 ¥' + fmtMoney(monthTotal)
+        summary: '合计 ¥' + fmtMoney(monthTotal),
+        onToggle: () => renderListOnly(container)
       });
       container.appendChild(header);
       if (!collapsedMap.has(key)) {

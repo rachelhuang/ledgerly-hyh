@@ -1466,6 +1466,7 @@ const { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToas
 
 let allRecords = [];
 let search = '';
+let suppressCollapse = false;  // 搜索时强制所有月份展开
 let useDateRange = false;
 let rangeStart = '';
 let rangeEnd = '';
@@ -1545,6 +1546,7 @@ function isCurrentPeriodKey(key) {
 // kind: 'month' | 'day' — day 强制展开（不参与折叠逻辑）
 function isCollapsed(key, kind) {
   if (kind === 'day') return false;  // 按天组始终展开
+  if (suppressCollapse) return false;  // 搜索时强制全部展开
   if (collapsedMap.has(key)) return true;  // 用户手动折叠的，记忆
   if (collapsedMap.has('__expanded:' + key)) return false;  // 用户手动展开的，记忆
   // 首次访问：非当月默认折叠
@@ -1613,6 +1615,8 @@ async function renderRecords() {
   // 关键修复：input 事件 + 状态更新时不重渲染 input
   searchInput.oninput = (e) => {
     search = e.target.value;
+    // 输入搜索时：所有月份默认展开（搜索结果不应该被折叠状态隐藏）
+    suppressCollapse = search.trim().length > 0;
     // 只更新列表 + summary，不重渲染整个 searchBar
     rerenderListOnly();
   };
@@ -1650,7 +1654,6 @@ async function renderRecords() {
     }));
     wrap.appendChild(range);
   }
-
   // 列表 + 顶部汇总区域（动态重渲染部分）
   const listContainer = el('div', { id: 'records-list-container' });
   wrap.appendChild(listContainer);

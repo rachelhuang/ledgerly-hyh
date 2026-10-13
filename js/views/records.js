@@ -65,11 +65,48 @@ function formatMonthHeader(ym) {
 // 可折叠分组标题。collapsedMap 记录哪些 key 是折叠的（key 形如 'day:2026-09-26' 或 'month:2026-09'）
 const collapsedMap = new Set();
 
+// 判断一个 key 是不是"当月"（用于默认折叠逻辑）
+function isCurrentPeriodKey(key) {
+  const now = new Date();
+  const curYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const curDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  // month:YYYY-MM
+  if (key.startsWith('month:')) return key === 'month:' + curYM;
+  // day:YYYY-MM-DD
+  if (key.startsWith('day:')) return key === 'day:' + curDay;
+  return false;
+}
+
+// 折叠状态管理：当月展开，其他月折叠
+function isCollapsed(key) {
+  if (collapsedMap.has(key)) return true;  // 用户手动折叠的，记忆
+  if (collapsedMap.has('__expanded:' + key)) return false;  // 用户手动展开的，记忆
+  // 首次访问：非当月默认折叠
+  return !isCurrentPeriodKey(key);
+}
+function toggle(key) {
+  if (collapsedMap.has(key)) {
+    collapsedMap.delete(key);
+    collapsedMap.add('__expanded:' + key);
+  } else if (collapsedMap.has('__expanded:' + key)) {
+    collapsedMap.delete('__expanded:' + key);
+    collapsedMap.add(key);
+  } else {
+    // 首次切换：根据目标状态决定
+    if (isCurrentPeriodKey(key)) {
+      // 当月展开 → 现在折叠
+      collapsedMap.add(key);
+    } else {
+      // 非当月折叠 → 现在展开
+      collapsedMap.add('__expanded:' + key);
+    }
+  }
+}
+
 function makeGroupHeader({ key, label, summary, onToggle }) {
-  const isCollapsed = collapsedMap.has(key);
-  const toggle = () => {
-    if (collapsedMap.has(key)) collapsedMap.delete(key);
-    else collapsedMap.add(key);
+  const collapsed = isCollapsed(key);
+  const handleToggle = () => {
+    toggle(key);
     if (onToggle) onToggle();
   };
   const header = el('div', { class: 'day-section collapsible' });
@@ -77,14 +114,14 @@ function makeGroupHeader({ key, label, summary, onToggle }) {
     el('span', {
       class: 'caret',
       style: 'font-size:10px; transition: transform 0.15s; display:inline-block; width:10px;',
-      onclick: (e) => { e.stopPropagation(); toggle(); }
-    }, isCollapsed ? '▶' : '▼'),
+      onclick: (e) => { e.stopPropagation(); handleToggle(); }
+    }, collapsed ? '▶' : '▼'),
     el('span', {}, label)
   );
   header.appendChild(left);
   header.appendChild(el('span', {}, summary));
   header.style.cursor = 'pointer';
-  header.onclick = toggle;
+  header.onclick = handleToggle;
   return header;
 }
 
@@ -212,7 +249,7 @@ export async function renderRecords() {
           onToggle: rerenderListOnly
         });
         container.appendChild(header);
-        if (!collapsedMap.has(key)) {
+        if (!isCollapsed(key)) {
           for (const r of items) container.appendChild(renderRow(r));
         }
       }
@@ -229,7 +266,7 @@ export async function renderRecords() {
           onToggle: rerenderListOnly
         });
         container.appendChild(header);
-        if (!collapsedMap.has(key)) {
+        if (!isCollapsed(key)) {
           for (const r of items) container.appendChild(renderRow(r));
         }
       }
@@ -325,7 +362,7 @@ function renderListOnly(container) {
         onToggle: () => renderListOnly(container)
       });
       container.appendChild(header);
-      if (!collapsedMap.has(key)) {
+      if (!isCollapsed(key)) {
         for (const r of items) container.appendChild(renderRow(r));
       }
     }
@@ -341,7 +378,7 @@ function renderListOnly(container) {
         onToggle: () => renderListOnly(container)
       });
       container.appendChild(header);
-      if (!collapsedMap.has(key)) {
+      if (!isCollapsed(key)) {
         for (const r of items) container.appendChild(renderRow(r));
       }
     }

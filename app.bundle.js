@@ -2007,7 +2007,10 @@ async function renderSettings() {
   ));
   wrap.appendChild(sec7);
 
-  root.appendChild(wrap);
+  // 用 .scroll 容器包起来，这样设置页内容能滚动
+  const scroll = el('div', { class: 'scroll' });
+  scroll.appendChild(wrap);
+  root.appendChild(scroll);
 
   // CSV 导入 input 绑定
   const csvInput = document.getElementById('csv-import-input-settings');

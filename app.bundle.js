@@ -1823,7 +1823,6 @@ function renderListOnly(container) {
         }
       }
     }
-    }
   }
 }
 window.renderRecords = renderRecords;

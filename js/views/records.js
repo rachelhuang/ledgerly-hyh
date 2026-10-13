@@ -3,9 +3,10 @@ import { el, fmtMoney, fmtDate, fmtYM, fmtMonthDay, catIcon, startOfDay, showToa
 
 let allRecords = [];
 let search = '';
-let useRange = false;
+let useDateRange = false;
 let rangeStart = '';
 let rangeEnd = '';
+let groupMode = 'day'; // 'day' | 'month'
 
 async function load() {
   allRecords = (await DB.getAll()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -20,7 +21,7 @@ function matchesQuery(r) {
 }
 
 function inRange(r) {
-  if (!useRange) return true;
+  if (!useDateRange) return true;
   const t = new Date(r.timestamp);
   const s = startOfDay(new Date(rangeStart));
   const e = new Date(rangeEnd);
@@ -42,6 +43,25 @@ function groupByDay(records) {
   return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 }
 
+function groupByMonth(records) {
+  const groups = new Map();
+  for (const r of records) {
+    const m = fmtYM(r.timestamp);  // 'YYYY-MM'
+    if (!groups.has(m)) groups.set(m, []);
+    groups.get(m).push(r);
+  }
+  return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+function formatDayHeader(iso) {
+  return new Date(iso).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
+function formatMonthHeader(ym) {
+  const [y, m] = ym.split('-');
+  return `${y}年${m}月`;
+}
+
 export async function renderRecords() {
   await load();
   const root = document.getElementById('view');
@@ -49,18 +69,23 @@ export async function renderRecords() {
 
   const wrap = el('div', { style: 'padding-top: 8px;' });
 
-  // search bar
+  // 搜索栏：input 一旦创建就不重渲染（关键修复：解决失焦问题）
   const searchBar = el('div', { class: 'search-bar' });
   const searchInput = el('input', {
     type: 'search',
     placeholder: '搜索描述、类型或原文',
-    value: search,
-    oninput: (e) => { search = e.target.value; rerender(); }
+    value: search
   });
+  // 关键修复：input 事件 + 状态更新时不重渲染 input
+  searchInput.oninput = (e) => {
+    search = e.target.value;
+    // 只更新列表 + summary，不重渲染整个 searchBar
+    rerenderListOnly();
+  };
   searchBar.appendChild(searchInput);
   wrap.appendChild(searchBar);
 
-  // filter toggle
+  // 按时间段筛选
   const today = new Date();
   const monthAgo = new Date(); monthAgo.setMonth(today.getMonth() - 1);
   if (!rangeStart) rangeStart = monthAgo.toISOString().slice(0, 10);
@@ -69,72 +94,114 @@ export async function renderRecords() {
   const toggle = el('label', { class: 'filter-toggle' });
   toggle.appendChild(el('input', {
     type: 'checkbox',
-    checked: useRange,
-    onchange: (e) => { useRange = e.target.checked; rerender(); }
+    checked: useDateRange,
+    onchange: (e) => { useDateRange = e.target.checked; rerenderListOnly(); }
   }));
   toggle.appendChild(document.createTextNode('按时间段筛选'));
   wrap.appendChild(toggle);
 
-  if (useRange) {
+  if (useDateRange) {
     const range = el('div', { class: 'date-range' });
     range.appendChild(el('span', {}, '起'));
     range.appendChild(el('input', {
       type: 'date',
       value: rangeStart,
-      onchange: (e) => { rangeStart = e.target.value; rerender(); }
+      onchange: (e) => { rangeStart = e.target.value; rerenderListOnly(); }
     }));
     range.appendChild(el('span', {}, '止'));
     range.appendChild(el('input', {
       type: 'date',
       value: rangeEnd,
-      onchange: (e) => { rangeEnd = e.target.value; rerender(); }
+      onchange: (e) => { rangeEnd = e.target.value; rerenderListOnly(); }
     }));
     wrap.appendChild(range);
   }
 
-  const recs = filtered();
-  const total = recs.reduce((s, r) => s + Number(r.amount), 0);
-  wrap.appendChild(el('div', { class: 'summary-line' },
-    el('span', {}, `共 ${recs.length} 笔 · 合计 ¥${fmtMoney(total)}`),
-    el('button', {
-      class: 'export-btn',
-      onclick: () => {
-        const stamp = new Date().toISOString().slice(0, 10);
-        exportCSV(recs, [
-          { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
-          { key: 'category', label: '类别' },
-          { key: 'description', label: '描述' },
-          { key: 'amount', label: '金额(元)' },
-          { key: 'rawInput', label: '原始输入' }
-        ], 'ledgerly_' + stamp + '.csv');
-      }
-    }, '📤 导出 CSV')
-  ));
-
-  if (!recs.length) {
-    wrap.appendChild(el('div', { class: 'empty' },
-      el('div', { class: 'ico' }, '📋'),
-      el('div', {}, '暂无记录')
-    ));
-  } else {
-    const days = groupByDay(recs);
-    for (const [day, items] of days) {
-      const dayTotal = items.reduce((s, r) => s + Number(r.amount), 0);
-      const header = el('div', { class: 'day-section' },
-        el('span', {}, fmtYM(day) + '-' + String(new Date(day).getDate()).padStart(2, '0')),
-        el('span', {}, '合计 ¥' + fmtMoney(dayTotal))
-      );
-      wrap.appendChild(header);
-      for (const r of items) {
-        wrap.appendChild(renderRow(r));
-      }
-    }
-  }
+  // 列表 + 顶部汇总区域（动态重渲染部分）
+  const listContainer = el('div', { id: 'records-list-container' });
+  wrap.appendChild(listContainer);
 
   root.appendChild(wrap);
 
-  function rerender() {
-    renderRecords();
+  // 初次渲染列表
+  rerenderListOnly();
+
+  function rerenderListOnly() {
+    // 只重渲染汇总 + 列表，搜索框 / 时间筛选不动
+    renderListInto(listContainer);
+  }
+
+  function renderListInto(container) {
+    container.innerHTML = '';
+
+    const recs = filtered();
+    const total = recs.reduce((s, r) => s + Number(r.amount), 0);
+    container.appendChild(el('div', { class: 'summary-line' },
+      el('span', {}, `共 ${recs.length} 笔 · 合计 ¥${fmtMoney(total)}`),
+      el('div', { style: 'display:flex; gap:8px; align-items:center;' },
+        // 分组方式切换
+        (() => {
+          const tabs = el('div', { class: 'group-tabs' });
+          for (const [mode, label] of [['day', '按日'], ['month', '按月']]) {
+            tabs.appendChild(el('button', {
+              class: mode === groupMode ? 'active' : '',
+              onclick: () => { groupMode = mode; renderListInto(container); }
+            }, label));
+          }
+          return tabs;
+        })(),
+        el('button', {
+          class: 'export-btn',
+          onclick: () => {
+            const stamp = new Date().toISOString().slice(0, 10);
+            exportCSV(recs, [
+              { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+              { key: 'category', label: '类别' },
+              { key: 'description', label: '描述' },
+              { key: 'amount', label: '金额(元)' },
+              { key: 'rawInput', label: '原始输入' }
+            ], 'ledgerly_' + stamp + '.csv');
+          }
+        }, '📤 导出')
+      )
+    ));
+
+    if (!recs.length) {
+      container.appendChild(el('div', { class: 'empty' },
+        el('div', { class: 'ico' }, '📋'),
+        el('div', {}, '暂无记录')
+      ));
+      return;
+    }
+
+    if (groupMode === 'day') {
+      const days = groupByDay(recs);
+      for (const [day, items] of days) {
+        const dayTotal = items.reduce((s, r) => s + Number(r.amount), 0);
+        const header = el('div', { class: 'day-section' },
+          el('span', {}, formatDayHeader(day)),
+          el('span', {}, '合计 ¥' + fmtMoney(dayTotal))
+        );
+        container.appendChild(header);
+        for (const r of items) {
+          container.appendChild(renderRow(r));
+        }
+      }
+    } else {
+      // 按月分组
+      const months = groupByMonth(recs);
+      for (const [ym, items] of months) {
+        const monthTotal = items.reduce((s, r) => s + Number(r.amount), 0);
+        const header = el('div', { class: 'day-section' },
+          el('span', {}, formatMonthHeader(ym) + ' · ' + items.length + ' 笔'),
+          el('span', {}, '合计 ¥' + fmtMoney(monthTotal))
+        );
+        container.appendChild(header);
+        for (const r of items) {
+          container.appendChild(renderRow(r));
+        }
+      }
+    }
   }
 }
 
@@ -159,11 +226,80 @@ function renderRow(r) {
         try {
           await DB.remove(r.id);
           showToast('已删除');
-          await renderRecords();
+          // 删除后重新渲染列表（不要 rerenderRecords，会重置搜索框）
+          const container = document.getElementById('records-list-container');
+          if (container) {
+            await load();
+            // 模拟构造一个内部函数调用：简单实现是直接调 renderListInto
+            renderListOnly(container);
+          }
         } catch (err) {
           showToast('删除失败：' + err.message);
         }
       }
     }, '🗑')
   );
+}
+
+// 删除后用的轻量刷新函数（从 renderRecords 里复制出来独立定义）
+function renderListOnly(container) {
+  container.innerHTML = '';
+  const recs = filtered();
+  const total = recs.reduce((s, r) => s + Number(r.amount), 0);
+  container.appendChild(el('div', { class: 'summary-line' },
+    el('span', {}, `共 ${recs.length} 笔 · 合计 ¥${fmtMoney(total)}`),
+    el('div', { style: 'display:flex; gap:8px; align-items:center;' },
+      (() => {
+        const tabs = el('div', { class: 'group-tabs' });
+        for (const [mode, label] of [['day', '按日'], ['month', '按月']]) {
+          tabs.appendChild(el('button', {
+            class: mode === groupMode ? 'active' : '',
+            onclick: () => { groupMode = mode; renderListOnly(container); }
+          }, label));
+        }
+        return tabs;
+      })(),
+      el('button', {
+        class: 'export-btn',
+        onclick: () => {
+          const stamp = new Date().toISOString().slice(0, 10);
+          exportCSV(recs, [
+            { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+            { key: 'category', label: '类别' },
+            { key: 'description', label: '描述' },
+            { key: 'amount', label: '金额(元)' },
+            { key: 'rawInput', label: '原始输入' }
+          ], 'ledgerly_' + stamp + '.csv');
+        }
+      }, '📤 导出')
+    )
+  ));
+  if (!recs.length) {
+    container.appendChild(el('div', { class: 'empty' },
+      el('div', { class: 'ico' }, '📋'),
+      el('div', {}, '暂无记录')
+    ));
+    return;
+  }
+  if (groupMode === 'day') {
+    const days = groupByDay(recs);
+    for (const [day, items] of days) {
+      const dayTotal = items.reduce((s, r) => s + Number(r.amount), 0);
+      container.appendChild(el('div', { class: 'day-section' },
+        el('span', {}, formatDayHeader(day)),
+        el('span', {}, '合计 ¥' + fmtMoney(dayTotal))
+      ));
+      for (const r of items) container.appendChild(renderRow(r));
+    }
+  } else {
+    const months = groupByMonth(recs);
+    for (const [ym, items] of months) {
+      const monthTotal = items.reduce((s, r) => s + Number(r.amount), 0);
+      container.appendChild(el('div', { class: 'day-section' },
+        el('span', {}, formatMonthHeader(ym) + ' · ' + items.length + ' 笔'),
+        el('span', {}, '合计 ¥' + fmtMoney(monthTotal))
+      ));
+      for (const r of items) container.appendChild(renderRow(r));
+    }
+  }
 }

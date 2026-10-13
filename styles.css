@@ -354,6 +354,8 @@ h2 { font-size: 16px; margin: 0 0 10px; font-weight: 600; }
 }
 .date-range input { font-size: 12px; padding: 4px; }
 .day-section { padding: 10px 16px 4px; font-size: 12px; color: var(--subtext); display: flex; justify-content: space-between; background: var(--bg); }
+.day-section.collapsible { background: var(--bg); }
+.day-section.collapsible:hover { background: rgba(0,0,0,0.04); }
 .record-row {
   display: flex;
   align-items: center;

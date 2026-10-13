@@ -1829,7 +1829,6 @@ function renderListOnly(container) {
         // 日强制展开（不需要判断 isCollapsed）
         for (const r of dayItems) container.appendChild(renderRow(r));
       }
-      }
     }
   }
 }

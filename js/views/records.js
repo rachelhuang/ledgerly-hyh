@@ -360,6 +360,5 @@ function renderListOnly(container) {
         }
       }
     }
-    }
   }
 }

@@ -243,7 +243,8 @@ export async function renderRecords() {
         key: monthKey,
         label: formatMonthHeader(ym) + ' · ' + items.length + ' 笔',
         summary: '合计 ¥' + fmtMoney(monthTotal),
-        onToggle: rerenderListOnly
+        onToggle: rerenderListOnly,
+        kind: 'month'
       });
       container.appendChild(monthHeader);
 
@@ -257,13 +258,12 @@ export async function renderRecords() {
             key: dayKey,
             label: formatDayHeader(day) + ' · ' + dayItems.length + ' 笔',
             summary: '合计 ¥' + fmtMoney(dayTotal),
-            onToggle: rerenderListOnly
+            onToggle: rerenderListOnly,
+            kind: 'day'
           });
           container.appendChild(dayHeader);
-          // 日也支持折叠（虽然默认展开）
-          if (!isCollapsed(dayKey, "day")) {
-            for (const r of dayItems) container.appendChild(renderRow(r));
-          }
+          // 日强制展开（不需要判断 isCollapsed）
+          for (const r of dayItems) container.appendChild(renderRow(r));
         }
       }
     }
@@ -344,7 +344,8 @@ function renderListOnly(container) {
       key: monthKey,
       label: formatMonthHeader(ym) + ' · ' + items.length + ' 笔',
       summary: '合计 ¥' + fmtMoney(monthTotal),
-      onToggle: () => renderListOnly(container)
+      onToggle: () => renderListOnly(container),
+      kind: 'month'
     });
     container.appendChild(monthHeader);
 
@@ -358,13 +359,13 @@ function renderListOnly(container) {
           key: dayKey,
           label: formatDayHeader(day) + ' · ' + dayItems.length + ' 笔',
           summary: '合计 ¥' + fmtMoney(dayTotal),
-          onToggle: () => renderListOnly(container)
+          onToggle: () => renderListOnly(container),
+          kind: 'day'
         });
         container.appendChild(dayHeader);
-        // 日也支持折叠（虽然默认展开）
-        if (!isCollapsed(dayKey, "day")) {
-          for (const r of dayItems) container.appendChild(renderRow(r));
-        }
+        // 日强制展开（不需要判断 isCollapsed）
+        for (const r of dayItems) container.appendChild(renderRow(r));
+      }
       }
     }
   }

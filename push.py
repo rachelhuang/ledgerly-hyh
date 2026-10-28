@@ -13,7 +13,10 @@ workflow 会被 GitHub 限流（startup_failure）。
 import os, sys, base64, json, urllib.request, urllib.error
 
 REPO = 'rachelhuang/ledgerly-hyh'
-BRANCH = 'main'
+# 目标分支：
+#   main      → 走 GitHub Actions 部署（有频率限制，会 startup_failure）
+#   gh-pages  → GitHub Pages 直接发布静态文件（不走 Actions，无限制，推荐）
+BRANCH = os.environ.get('PUSH_BRANCH', 'gh-pages')
 API = f'https://api.github.com/repos/{REPO}'
 
 # 要推送的文件
@@ -88,19 +91,26 @@ def api(path, method='GET', data=None):
 def main():
     root = os.path.dirname(os.path.abspath(__file__))
 
-    # 1) 拿当前 main 分支的 HEAD commit + tree
+    # 1) 拿到目标分支的 HEAD commit + tree（分支不存在则用 main 的作为基底）
     code, ref = api(f'/git/ref/heads/{BRANCH}')
-    if code != 200:
-        print(f'ERROR: 读取 branch 失败 ({code}): {ref.get("message")}')
-        sys.exit(1)
-    base_commit_sha = ref['object']['sha']
+    if code == 200:
+        base_commit_sha = ref['object']['sha']
+        print(f'目标分支 {BRANCH} 已存在，HEAD: {base_commit_sha[:7]}')
+    else:
+        # 分支不存在：从 main 创建
+        code, ref = api('/git/ref/heads/main')
+        if code != 200:
+            print(f'ERROR: 读取 main 分支失败 ({code}): {ref.get("message")}')
+            sys.exit(1)
+        base_commit_sha = ref['object']['sha']
+        print(f'目标分支 {BRANCH} 不存在，将基于 main 创建，基底: {base_commit_sha[:7]}')
 
     code, commit = api(f'/git/commits/{base_commit_sha}')
     if code != 200:
         print(f'ERROR: 读取 commit 失败 ({code})')
         sys.exit(1)
     base_tree_sha = commit['tree']['sha']
-    print(f'当前 HEAD: {base_commit_sha[:7]}  tree: {base_tree_sha[:7]}')
+    print(f'base tree: {base_tree_sha[:7]}')
 
     # 2) 为每个文件创建 blob
     tree_entries = []
@@ -147,19 +157,35 @@ def main():
         sys.exit(1)
     print(f'新 commit: {new_commit["sha"][:7]}')
 
-    # 5) 更新 main 分支指针（这一步才会触发 1 次 Pages 部署）
-    code, updated = api(f'/git/refs/heads/{BRANCH}', 'PATCH', {
-        'sha': new_commit['sha'],
-        'force': False,
-    })
+    # 5) 更新目标分支指针
+    #    - 分支不存在 → 创建（POST /git/refs）
+    #    - 分支存在   → 快进更新（PATCH /git/refs）
+    code, exists = api(f'/git/ref/heads/{BRANCH}')
+    if code == 200:
+        code, updated = api(f'/git/refs/heads/{BRANCH}', 'PATCH', {
+            'sha': new_commit['sha'],
+            'force': False,
+        })
+        action = '更新'
+    else:
+        code, updated = api('/git/refs', 'POST', {
+            'ref': f'refs/heads/{BRANCH}',
+            'sha': new_commit['sha'],
+        })
+        action = '创建'
+
     if code not in (200, 201):
-        print(f'ERROR: 更新分支失败 ({code}): {updated.get("message")}')
+        print(f'ERROR: {action}分支失败 ({code}): {updated.get("message")}')
         sys.exit(1)
 
     print()
-    print(f'✅ 推送完成（1 个 commit，触发 1 次部署）')
+    print(f'✅ 推送完成（1 个 commit → {action} {BRANCH} 分支）')
     print(f'   https://github.com/{REPO}/commit/{new_commit["sha"]}')
-    print('   GitHub Pages 将在 1-2 分钟内自动部署。')
+    if BRANCH == 'gh-pages':
+        print('   等待 GitHub Pages 发布（通常 1 分钟内，无需 Actions）')
+        print('   ⚠️ 记得在 Settings → Pages 把 Source 设为 gh-pages 分支')
+    else:
+        print('   GitHub Pages 将在 1-2 分钟内自动部署（走 Actions，可能受频率限制）')
 
 
 if __name__ == '__main__':

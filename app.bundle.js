@@ -1,8 +1,13 @@
 // === js/db.js ===
 // IndexedDB wrapper for Ledgerly expense records.
-// Replaces SwiftData @Model storage in the iOS app.
+//
+// 数据安全原则：**绝不自动删除数据库**。
+// 任何异常都先诊断、给出可导出的机会，只有用户明确点击「强制修复」才重建。
 
 const DB_NAME = 'ledgerly';
+// ⚠️ 不要随意提升版本号：一旦 version 变化会触发 onupgradeneeded，
+// 若此时旧连接未关闭可能被 blocked，进而导致数据风险。
+// 保持 1，通过 openRaw()/readRawAll() 做无损救援。
 const DB_VERSION = 1;
 const STORE = 'expenses';
 
@@ -11,25 +16,130 @@ let _dbPromise = null;
 function openDB() {
   if (_dbPromise) return _dbPromise;
   _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    let req;
+    try {
+      req = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (e) {
+      reject(e);
+      return;
+    }
     req.onupgradeneeded = () => {
       const db = req.result;
+      const tx = req.transaction;
       if (!db.objectStoreNames.contains(STORE)) {
-        const os = db.createObjectStore(STORE, { keyPath: 'id' });
-        os.createIndex('timestamp', 'timestamp', { unique: false });
+        db.createObjectStore(STORE, { keyPath: 'id' });
+      } else {
+        try {
+          const os = tx.objectStore(STORE);
+          if (!os.indexNames.contains('timestamp')) {
+            os.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+        } catch (e) {
+          console.warn('索引创建失败（忽略）:', e);
+        }
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); _dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => reject(req.error || new Error('无法打开数据库'));
+    req.onblocked = () => {
+      _dbPromise = null;
+      reject(new Error('数据库被其他 Ledgerly 窗口占用，请关闭其他窗口后刷新'));
+    };
   });
   return _dbPromise;
 }
 
-function tx(mode = 'readonly') {
-  return openDB().then((db) => {
-    const t = db.transaction(STORE, mode);
-    return t.objectStore(STORE);
+/** 打开数据库但不升级（用于诊断/救援，可读取旧版本） */
+function openRaw() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME);   // 不带 version → 不触发 upgrade
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error('被其他窗口阻塞'));
   });
+}
+
+/** 列出浏览器中所有数据库及其结构（诊断用） */
+async function listDatabases() {
+  if (!indexedDB.databases) return [];
+  try {
+    const dbs = await indexedDB.databases();
+    return dbs.map(d => ({
+      name: d.name,
+      version: d.version,
+      stores: (d.objectStores || []).map(s => s.name)
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+/** 直接从原始 store 读取（不做任何修复），用于救援导出 */
+async function readRawAll() {
+  const db = await openRaw();
+  try {
+    if (!db.objectStoreNames.contains(STORE)) {
+      return { ok: false, reason: '数据库中不存在 expenses 表', records: [] };
+    }
+    const store = db.transaction(STORE, 'readonly').objectStore(STORE);
+    const records = await new Promise((resolve, reject) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+    return { ok: true, reason: '', records };
+  } finally {
+    db.close();
+  }
+}
+
+/** 删除数据库（仅在用户明确确认「强制修复」时调用） */
+function forceDeleteDB() {
+  _dbPromise = null;
+  return new Promise((resolve) => {
+    let req;
+    try {
+      req = indexedDB.deleteDatabase(DB_NAME);
+    } catch (e) {
+      resolve();
+      return;
+    }
+    const done = () => resolve();
+    req.onsuccess = done;
+    req.onerror = done;
+    req.onblocked = done;
+    setTimeout(done, 2000);
+  });
+}
+
+/** 拿到 object store（不做任何删除操作） */
+async function getStore(mode) {
+  // 最多重试 2 次：第一次正常，失败后重开连接再试
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE)) {
+        throw new Error('数据库结构异常（缺少 expenses 表），请到「设置 → 数据救援」处理');
+      }
+      return db.transaction(STORE, mode).objectStore(STORE);
+    } catch (e) {
+      lastErr = e;
+      // 连接可能已被 Safari 冻结关闭 → 丢弃缓存，下次重新打开
+      _dbPromise = null;
+      console.warn('数据库操作失败（第 ' + (attempt + 1) + ' 次），重开连接重试:', e);
+      // 让出主线程，给浏览器机会恢复连接
+      await new Promise(r => setTimeout(r, 120));
+    }
+  }
+  throw lastErr || new Error('数据库操作失败');
+}
+function tx(mode = 'readonly') {
+  return getStore(mode);
 }
 
 function uid() {
@@ -82,7 +192,37 @@ async function clear() {
   });
 }
 
-window.DB = { uid, add, put, remove, getAll, clear };
+/**
+ * 页面从后台恢复时重置连接。
+ * Safari 在页面挂起一段时间后会冻结页面并静默关闭 IndexedDB 连接，
+ * 导致后续 db.transaction() 抛 InvalidStateError。
+ * 恢复时丢弃缓存的连接，下次操作会重新建立。
+ */
+function resetConnection() {
+  _dbPromise = null;
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      resetConnection();
+      console.log('页面恢复前台，重置数据库连接');
+    }
+  });
+  // 从 BFCache 恢复（iOS Safari 常见）
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) resetConnection();
+  });
+  window.addEventListener('pagehide', () => resetConnection());
+  // 页面卸载时主动关闭连接，避免阻塞其他标签页
+  window.addEventListener('beforeunload', () => {
+    if (_dbPromise) {
+      _dbPromise.then(db => { try { db.close(); } catch (e) {} }).catch(() => {});
+    }
+  });
+}
+
+window.DB = { openRaw, listDatabases, readRawAll, forceDeleteDB, uid, add, put, remove, getAll, clear, resetConnection };
 
 
 // === js/settings.js ===
@@ -2007,14 +2147,124 @@ async function renderSettings() {
   ));
   wrap.appendChild(sec7);
 
+  // 数据救援（数据库异常时的自救工具）
+  const sec8 = el('div', { class: 'section' });
+  sec8.appendChild(el('h3', {}, '🔧 数据救援'));
+  sec8.appendChild(el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap;' },
+    el('button', {
+      class: 'btn-primary',
+      style: 'flex:1; min-width:140px; background:#f08c00;',
+      onclick: diagnoseDB
+    }, '🔍 诊断数据库'),
+    el('button', {
+      class: 'btn-primary',
+      style: 'flex:1; min-width:140px; background:#4c6ef5;',
+      onclick: rescueExport
+    }, '💾 原始数据导出')
+  ));
+  sec8.appendChild(el('div', { class: 'footer', style: 'margin-top:6px;' },
+    '💡 数据库异常时，先「原始数据导出」把数据抢救出来，再考虑修复。'
+  ));
+  sec8.appendChild(el('button', {
+    class: 'btn-secondary-danger',
+    style: 'width:100%; margin-top:8px; background:transparent; color:var(--red); border:1px solid var(--red); padding:8px; border-radius:8px; font-size:13px; cursor:pointer;',
+    onclick: forceRepair
+  }, '⚠️ 强制修复（会清空当前数据库）'));
+  wrap.appendChild(sec8);
+
   // 用 .scroll 容器包起来，这样设置页内容能滚动
   const scroll = el('div', { class: 'scroll' });
   scroll.appendChild(wrap);
   root.appendChild(scroll);
 
+  // ============ 数据救援函数 ============
+
+  /** 诊断数据库结构（只读，不修改任何数据） */
+  async function diagnoseDB() {
+    const lines = [];
+    try {
+      const dbs = await DB.listDatabases();
+      lines.push('【浏览器中的数据库】');
+      if (!dbs.length) lines.push('  (无)');
+      dbs.forEach(d => {
+        lines.push(`  ${d.name}  v${d.version}  stores: ${d.stores.length ? d.stores.join(', ') : '(无)'}`);
+      });
+    } catch (e) {
+      lines.push('列出数据库失败: ' + e.message);
+    }
+
+    lines.push('');
+    try {
+      const db = await DB.openRaw();
+      lines.push('【直接打开 ledgerly 成功】');
+      lines.push('  version: ' + db.version);
+      const stores = Array.from(db.objectStoreNames);
+      lines.push('  stores: ' + (stores.length ? stores.join(', ') : '(无)'));
+      if (stores.includes('expenses')) {
+        const cnt = await new Promise((res) => {
+          const req = db.transaction('expenses', 'readonly').objectStore('expenses').count();
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => res('?');
+        });
+        lines.push('  expenses 记录数: ' + cnt);
+      }
+      db.close();
+    } catch (e) {
+      lines.push('【直接打开失败】' + e.message);
+    }
+
+    lines.push('');
+    try {
+      const all = await DB.getAll();
+      const total = all.reduce((s, r) => s + Number(r.amount), 0);
+      lines.push('【App 正常读取】' + all.length + ' 条，合计 ¥' + total.toFixed(2));
+    } catch (e) {
+      lines.push('【App 读取失败】' + e.message);
+    }
+
+    alert(lines.join('\n'));
+  }
+
+  /** 原始数据导出：绕过 db.transaction，最大限度抢救数据 */
+  async function rescueExport() {
+    try {
+      const res = await DB.readRawAll();
+      if (!res.ok) {
+        showToast('无法读取：' + res.reason);
+        return;
+      }
+      if (!res.records.length) {
+        showToast('没有数据可导出');
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      exportCSV(res.records, [
+        { key: 'timestamp', label: '消费时间', format: (v) => new Date(v).toLocaleString('zh-CN') },
+        { key: 'category', label: '类别' },
+        { key: 'description', label: '描述' },
+        { key: 'amount', label: '金额(元)' },
+        { key: 'rawInput', label: '原始输入' }
+      ], 'ledgerly_rescue_' + stamp + '.csv');
+    } catch (e) {
+      showToast('导出失败：' + e.message);
+    }
+  }
+
+  /** 强制修复：删除数据库并重建（会清空数据，需用户明确确认） */
+  async function forceRepair() {
+    if (!confirm('⚠️ 强制修复会删除当前数据库，所有本地记录将丢失。\n\n请先点「💾 原始数据导出」备份！\n\n确定要继续吗？')) return;
+    if (!confirm('再次确认：真的要清空所有数据吗？')) return;
+    try {
+      await DB.forceDeleteDB();
+      showToast('数据库已重置，刷新页面即可');
+      setTimeout(() => location.reload(), 800);
+    } catch (e) {
+      showToast('重置失败：' + e.message);
+    }
+  }
+
   // CSV 导入 input 绑定
-  const csvInput = document.getElementById('csv-import-input-settings');
-  if (csvInput) {
+  const csvInput = document.getElementById('csv-import-input-settings');  if (csvInput) {
     csvInput.onchange = (e) => {
       const file = e.target.files && e.target.files[0];
       if (file) importAllData(file);
